@@ -30,7 +30,7 @@ faqsd_pm_nemia <- function(load_year){
   pm_faqsd[, date := (if (alt_format) lubridate::mdy else lubridate::ymd)(date)]
   pm_faqsd
 }
-pm_faqsd_05 = faqsd_pm_nemia(2005)
+#pm_faqsd_05 = faqsd_pm_nemia(2005)
 
 # ozone:
 faqsd_ozone_nemia <- function(load_year){
@@ -52,4 +52,4 @@ faqsd_ozone_nemia <- function(load_year){
   oz_faqsd[, date := (if (alt_format) lubridate::mdy else lubridate::ymd)(date)]
   oz_faqsd
 }
-ozone_faqsd_05 <- faqsd_ozone_nemia(2005)
+#ozone_faqsd_05 <- faqsd_ozone_nemia(2005)
