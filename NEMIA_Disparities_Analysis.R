@@ -1,3 +1,100 @@
+library(data.table)
+library(fst)
+library(future.apply)
+library(lubridate)
+# library(tidyverse)
+# library(dtplyr)
+
+t00weights = read_fst('/data-coco/NEMIA_temperature/weights/nemia_tracts_2000_popdens.fst', as.data.table = TRUE)
+t10weights = read_fst('/data-coco/NEMIA_temperature/weights/nemia_tracts_2010_popdens.fst', as.data.table = TRUE)
+
+sample_half_month <- read_fst('/data-coco/NEMIA_temperature/saved-predictions/all_monthly/2003_05_h1.fst', as.data.table = T)
+
+start_date = as.Date('2003-05-01')
+end_date = as.Date('2019-09-30')
+all_dates = seq.Date(start_date, end_date, by = 1)
+warm_month_dates = subset(all_dates, format.Date(all_dates, "%m") %in% c("05","06","07","08","09"))
+warm_months = unique(format(warm_month_dates, '%Y_%m'))
+all_years = unique(format(warm_month_dates, '%Y'))
+# tz = "America/New York"
+
+all_files = apply(expand.grid(warm_months, c('h1.fst', 'h2.fst')), MARGIN = 1, 
+                  FUN = paste0, collapse = '_')
+all_files_2000CTs = sort(all_files)[1:70]
+all_files_2010CTs = sort(all_files)[71:170]
+
+path_preds = '/data-coco/NEMIA_temperature/saved-predictions/all_monthly/'
+save_hourly_CT_to = "/home/carrid08/northeast_temperature_disparities/data/hourly_tract_preds/"
+
+temperatureexcess <- function(temperature, threshold = 18.333){
+  pmax(temperature, threshold) - threshold
+}
+
+create_tract_hourly_summaries <- function(fst_file, tract_weights){
+  
+  temp =  read_fst(file.path(path_preds, fst_file), as.data.table = T)
+  
+    joined = tract_weights[temp, on = 'gid', nomatch = 0, allow.cartesian = TRUE]
+    weighted_hourly_bytract = joined[, .(w_temp = sum(pred.temp.K * popdens * coverage_area, na.rm = T)/
+                                          sum(popdens * coverage_area, na.rm = T),
+                                        w_temp_heatindex = sum(pred.heat.index.K * popdens * coverage_area, na.rm = T)/
+                                          sum(popdens * coverage_area, na.rm = T)),
+                                    by = .(GEOID, ground.time.nominal)]
+    write_fst(weighted_hourly_bytract, file.path(save_hourly_CT_to, fst_file))
+}
+
+
+start <- proc.time()
+# create_temp_measures(all_files_2000CTs[3], t00weights)
+create_tract_hourly_summaries(all_files_2000CTs[3], t00weights)
+proc.time() - start
+
+setDTthreads(threads = 15)
+lapply(all_files_2000CTs, FUN = create_tract_hourly_summaries, t00weights)
+lapply(all_files_2010CTs, FUN = create_tract_hourly_summaries, t10weights)
+
+###
+read_files <- function(fst_file){
+  read_fst(file.path(save_hourly_CT_to, fst_file), as.data.table = T)
+}
+
+produce_daily_summaries <- function(year){ 
+  
+  files_per_year <- all_files[all_files %like% as.expression(year)] 
+  all_temps_per_summer <- lapply(files_per_year, read_files)
+  all_temps_per_summer <- rbindlist(all_temps_per_summer)
+
+  all_temps_per_summer[, ground.time.nominal := format.POSIXct(ground.time.nominal, tz = "America/New_York")]
+  all_temps_per_summer[, date := as.Date(ground.time.nominal)]
+
+  daily_temps_and_cdds <- all_temps_per_summer[, .(mean_temp_daily = mean(w_temp),
+                                                 mean_htindx_daily = mean(w_temp_heatindex),
+                                                 noaa_mean = ((max(w_temp) - min(w_temp))/2)+min(w_temp)), 
+                                             by = .(GEOID, date)]
+
+  daily_temps_and_cdds[, cdd := temperatureexcess(mean_temp_daily - 273.15), by = c("GEOID", "date")]
+
+  evening_hours = all_temps_per_summer[hour(ground.time.nominal)<=6 | hour(ground.time.nominal)>=18]
+  evening_hours[, evening_cdh := temperatureexcess(w_temp - 273.15), by = c("GEOID", "ground.time.nominal")]
+
+  daily_cdhs = evening_hours[, .(nighttime.cdh = sum(evening_cdh, na.rm = T)),
+                                by = .(GEOID, date)]
+
+  all_exposures <- daily_temps_and_cdds[daily_cdhs, on = c("GEOID", "date"), nomatch = 0, allow.cartesian = TRUE]
+
+return(all_exposures)
+}
+
+# produce_daily_summaries(2003)
+
+NEMIA_daily_summaries_all_years <- lapply(all_years, produce_daily_summaries)
+NEMIA_daily_summaries_all_years <- rbindlist(NEMIA_daily_summaries_all_years)
+write.fst(NEMIA_daily_summaries_all_years, "/home/carrid08/northeast_temperature_disparities/data/summarized_daily_temp_preds.fst")
+
+
+
+
+
 library(tidyverse)
 library(tidycensus)
 library(here)
@@ -405,15 +502,88 @@ ggplot(combined_white_temps1) + geom_point(aes(x = xgboost_avg_cdds, y = nldas_a
 
 
 ###
-ACS_data_tract_race_temp <- ACS_data_tract_race_65plus %>%
-  inner_join(., Temperatures, by = "GEOID") %>%
-  mutate(xgboost_cdd = w_mean_cdh/24, 
-    county = str_sub(GEOID, 1, 5))
+# ACS_data_tract_race_temp <- ACS_data_tract_race_65plus %>%
+#   inner_join(., Temperatures, by = "GEOID") %>%
+#   mutate(xgboost_cdd = w_mean_cdh/24, 
+#     county = str_sub(GEOID, 1, 5))
+# 
 
-ACS_data_tract_race_temp %>% #across all NEMIA -- exposure disparity already pretty stark
+
+Temp_and_Race_byTract1 <- Temp_and_Race_byTract %>%
+  mutate(model = "XIS")
+
+Temp_and_Race_byTract1 %>%
+  filter(variable != "Total Population") %>%
   group_by(variable) %>%
-  summarise(weighted.mean(xgboost_cdd, estimate))
+  summarise(median = matrixStats::weightedMedian(cooling_dds, estimate))
 
+Temp_and_Race_byTract_NLDAS1 <- Temp_and_Race_byTract_NLDAS %>%
+  mutate(model = "NLDAS-2") 
+
+Temp_and_Race_byTract_NLDAS1 %>%
+  filter(variable != "Total Population") %>%
+  group_by(variable) %>%
+  summarise(median = matrixStats::weightedMedian(cooling_dds, estimate))
+
+Combined_temps <- bind_rows(Temp_and_Race_byTract1, Temp_and_Race_byTract_NLDAS1) %>%
+  filter(variable != "Total Population")
+
+Combined_temps %>% #across all NEMIA -- exposure disparity already pretty stark
+  filter(variable != "Total Population") %>%
+  group_by(variable, model) %>%
+  summarise(weighted.mean(cooling_dds, estimate))
+
+Combined_temps_uncounted <- Combined_temps %>% #across all NEMIA -- exposure disparity already pretty stark
+  filter(variable != "Total Population") %>%
+  dplyr::select(GEOID, variable, estimate, cooling_dds, model) %>%
+  ungroup() %>%
+  uncount(estimate)
+  
+sum(Combined_temps$estimate)
+dat_text <- data.frame(
+  label = c("558", "427", "524", "430"),
+  model = c("XIS", "XIS", "NLDAS-2", "NLDAS-2"),
+  x     = c(558, 427, 524, 430),
+  y     = c(.0065, .0027, .0071, .0027)
+)
+
+ggplot(data = Combined_temps_uncounted, aes(x = variable, y = cooling_dds, color = variable)) + 
+  geom_boxplot(width = .5, position = position_dodge(width = .01)) +
+  theme(legend.position = "none") + 
+  facet_grid(model ~ .) + 
+  coord_flip() + 
+  theme_minimal()
+
+#,plot.margin = unit(c(1, 1, 1, 1), "cm")
+
+# Combined_temps %>%
+#   ggplot(aes(cooling_dds)) +
+ggplot() + 
+  geom_density(data = Combined_temps, aes(x = cooling_dds, fill = variable, weights=estimate/sum(estimate)), alpha = .4) +
+  scale_fill_manual(values = c("#4053d3", "#ddb310")) + 
+  geom_text(data = dat_text, aes(label = label, x = x, y = y), size = 5) +
+  theme(text = element_text(size=20)) + 
+  labs(fill = "Race") + 
+  facet_grid(model ~ .) +
+  xlab("Cooling Degree Days (°C)") +
+  ylab("Density") 
+
+
+Epi_results <- bind_rows(tibble(Coefficient = exp(coef(summary(cens.pois.black))[2,1]*92), CI_low = exp(confint(cens.pois.black)*92)[2,1], CI_hi = exp(confint(cens.pois.black)*92)[2,2], Race = "Black", Model = "XIS"),
+tibble(Coefficient = exp(coef(summary(cens.pois.black.nldas))[2,1]*92), CI_low = exp(confint(cens.pois.black.nldas)*92)[2,1], CI_hi = exp(confint(cens.pois.black.nldas)*92)[2,2], Race = "Black", Model = "NLDAS-2"),
+tibble(Coefficient = exp(coef(summary(cens.pois.white))[2,1]*92), CI_low = exp(confint(cens.pois.white)*92)[2,1], CI_hi = exp(confint(cens.pois.white)*92)[2,2], Race = "White", Model = "XIS"),
+tibble(Coefficient = exp(coef(summary(cens.pois.white.nldas))[2,1]*92), CI_low = exp(confint(cens.pois.white.nldas)*92)[2,1], CI_hi = exp(confint(cens.pois.white.nldas)*92)[2,2], Race = "White", Model = "NLDAS-2"))
+
+ggplot(data=Epi_results)+
+  geom_pointrange(aes(x = Model, y = Coefficient, ymin = CI_low, ymax = CI_hi, color = Race)) + 
+  scale_color_manual(values = c("#4053d3", "#ddb310")) + 
+  facet_wrap(Race ~ .) +
+  ylab("Risk Ratio") + 
+  theme(text = element_text(size = 20))
+
+# ggplot() + 
+#   geom_boxplot(data = Combined_temps, aes(x = cooling_dds, y = .01, group = variable)) +
+#   facet_grid(model ~ .)
 
 summary(cens.pois.white.nldas)
 exp(.0004429*92)
