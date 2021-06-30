@@ -2,13 +2,14 @@ library(data.table)
 library(fst)
 library(future.apply)
 library(lubridate)
+# also dependent on 'weathermetrics' and 'humidity' packages being installed,
+# but they don't need to be loaded
 
 # Weighting tables
 t00weights = read_fst('/data-coco/NEMIA_temperature/weights/nemia_tracts_2000_popdens.fst', as.data.table = TRUE)
 t10weights = read_fst('/data-coco/NEMIA_temperature/weights/nemia_tracts_2010_popdens.fst', as.data.table = TRUE)
 t00_nldas = read_fst('/data-coco/NEMIA_temperature/weights/nemia_NLDAS_tracts_2000_popdens.fst', as.data.table = TRUE)
 t10_nldas = read_fst('/data-coco/NEMIA_temperature/weights/nemia_NLDAS_tracts_2010_popdens.fst', as.data.table = TRUE)
-
 
 sample_half_month <- read_fst('/data-coco/NEMIA_temperature/saved-predictions/all_monthly/2003_05_h1.fst', as.data.table = T)
 
@@ -52,7 +53,7 @@ create_tract_hourly_summaries <- function(fst_file, tract_weights){
 lapply(all_files_2000CTs, FUN = create_tract_hourly_summaries, t00weights)
 lapply(all_files_2010CTs, FUN = create_tract_hourly_summaries, t10weights)
 
-###
+
 read_files <- function(fst_file){
   read_fst(file.path(save_hourly_CT_to, fst_file), as.data.table = T)
 }
@@ -90,3 +91,83 @@ write.fst(NEMIA_daily_summaries_all_years, "/home/carrid08/northeast_temperature
 
 # NLDAS reanalysis data  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ####
 
+nldas_path = '/data-belle/NLDAS/processed/hourly/conus/'
+nldas_output = '/home/carrid08/northeast_temperature_disparities/data/hourly_tract_preds_nldas/'
+if(!dir.exists(nldas_output)) dir.create(nldas_output)
+
+FtoK = function(fahrenheit) (5/9) * (fahrenheit + 459.67)
+KtoF = function(kelvins) (9/5) * kelvins - 459.67
+# using same function as in NEMIA_temperature for consistency
+heat_index = function(temp.K, spec.humid, pressure.Pa){
+  FtoK(weathermetrics::heat.index(
+    round = Inf,
+    t = KtoF(temp.K),
+    rh = pmin(100, pmax(0, humidity::SH2RH(
+      q = spec.humid,
+      t = temp.K, isK = T,
+      p = pressure.Pa)))))
+}
+
+load_NLDAS_NEMIA = function(this_year, varname, fullyear){
+  if(fullyear == TRUE){
+    wide = read_fst(paste0(nldas_path, this_year, "_", varname, ".fst"), as.data.table = TRUE)
+    delete_hours = paste0(this_year, '0101.0', 0:4, '00')
+    delete_cols = c('x', 'y', delete_hours)
+    wide[, c(delete_cols) := NULL]
+  } else { # load first few hours UTC of next year (not needed for warm months)
+    load_hours = paste0(this_year + 1, '0101.0', 0:4, '00')
+    load_cols = c('NLDASid', 'inNEMIA', load_hours)
+    wide = read_fst(paste0(nldas_path, this_year + 1, "_", varname, ".fst"), as.data.table = TRUE,
+                    columns = load_cols)
+  }
+  wide = wide[inNEMIA == TRUE, -'inNEMIA']
+  long = melt.data.table(wide, id.vars = "NLDASid", variable.name = "datestr", value.name = varname)
+  rm(wide)
+  
+  long[, dtime := as.POSIXct(datestr, tz = 'UTC', format = '%Y%m%d.%H%M')]
+  long[, datestr := NULL]
+  attributes(long$dtime)$tzone <- 'America/New_York'
+  long = long[month(dtime) %in% 5:9] # subset to warm months
+  long
+}
+
+nldas_tract_hourly_summaries <- function(this_year, tract_weights, overwrite = FALSE){
+  
+  outfile = file.path(nldas_output, paste0(this_year, '_NLDAS_tract.fst'))
+  if(!file.exists(outfile) | overwrite == TRUE){
+    # load temperature, specific humidity, and pressure
+    long_TMP <- load_NLDAS_NEMIA(this_year, 'TMP', TRUE)  # 32s each
+    long_SPFH = load_NLDAS_NEMIA(this_year, 'SPFH', TRUE)
+    long_PRES = load_NLDAS_NEMIA(this_year, 'PRES', TRUE)
+    # combine all three variables
+    long_NLDAS = long_TMP[long_SPFH, on = .NATURAL][long_PRES, on = .NATURAL]
+    setcolorder(long_NLDAS, c('NLDASid', 'dtime'))
+    rm(long_TMP, long_SPFH, long_PRES)
+    
+    # calculate heat index 
+    long_NLDAS[, htindx := heat_index(TMP, SPFH, PRES)] # 83s
+    long_NLDAS[, c('SPFH', 'PRES') := NULL]
+    
+    # weight by population in tract
+    joined <- tract_weights[long_NLDAS, on = 'NLDASid', nomatch = 0, allow.cartesian = TRUE] # 6s
+    
+    weighted_hourly_bytract <- joined[, .(w_temp = sum(TMP * popdens * coverage_area, na.rm = T)/
+                                                  sum(popdens * coverage_area, na.rm = T),
+                                         w_temp_heatindex = sum(htindx * popdens * coverage_area, na.rm = T)/
+                                                  sum(popdens * coverage_area, na.rm = T)),
+                                     keyby = .(GEOID, dtime)] # 293s
+  
+    write_fst(weighted_hourly_bytract, outfile, compress = 100)
+    return(paste('Wrote NLDAS weighted tract values for', this_year, 'at', format(Sys.time(), '%H:%m')))
+  } else {
+    return(paste('Skipped NLDAS for', this_year))
+  }
+}
+
+# iterate over 'all_years'
+nldas_times_00 = lapply(all_years[all_years < 2010], FUN = nldas_tract_hourly_summaries, 
+                        tract_weights = t00_nldas) # ~10m per year
+nldas_times_10 = lapply(all_years[all_years >= 2010], FUN = nldas_tract_hourly_summaries, 
+                        tract_weights = t10_nldas) 
+
+# Next: NLDAS daily summaries, including CDD & CDH
