@@ -46,7 +46,7 @@ create_tract_hourly_summaries <- function(fst_file, tract_weights){
                                        w_temp_heatindex = sum(pred.heat.index.K * popdens * coverage_area, na.rm = T)/
                                          sum(popdens * coverage_area, na.rm = T)),
                                    by = .(GEOID, ground.time.nominal)]
-  write_fst(weighted_hourly_bytract, file.path(save_hourly_CT_to, fst_file))
+  write_fst(weighted_hourly_bytract, file.path(save_hourly_CT_to, fst_file), compress = 100)
 }
 
 lapply(all_files_2000CTs, FUN = create_tract_hourly_summaries, t00weights)
@@ -86,7 +86,7 @@ produce_daily_summaries <- function(year){
 
 NEMIA_daily_summaries_all_years <- lapply(all_years, produce_daily_summaries)
 NEMIA_daily_summaries_all_years <- rbindlist(NEMIA_daily_summaries_all_years)
-write.fst(NEMIA_daily_summaries_all_years, "/home/carrid08/northeast_temperature_disparities/data/summarized_daily_temp_preds.fst")
+write.fst(NEMIA_daily_summaries_all_years, "/home/carrid08/northeast_temperature_disparities/data/summarized_daily_temp_preds.fst", compress = 100)
 
 # NLDAS reanalysis data  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ####
 
