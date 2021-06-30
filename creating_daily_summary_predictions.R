@@ -3,9 +3,12 @@ library(fst)
 library(future.apply)
 library(lubridate)
 
-
+# Weighting tables
 t00weights = read_fst('/data-coco/NEMIA_temperature/weights/nemia_tracts_2000_popdens.fst', as.data.table = TRUE)
 t10weights = read_fst('/data-coco/NEMIA_temperature/weights/nemia_tracts_2010_popdens.fst', as.data.table = TRUE)
+t00_nldas = read_fst('/data-coco/NEMIA_temperature/weights/nemia_NLDAS_tracts_2000_popdens.fst', as.data.table = TRUE)
+t10_nldas = read_fst('/data-coco/NEMIA_temperature/weights/nemia_NLDAS_tracts_2010_popdens.fst', as.data.table = TRUE)
+
 
 sample_half_month <- read_fst('/data-coco/NEMIA_temperature/saved-predictions/all_monthly/2003_05_h1.fst', as.data.table = T)
 
@@ -17,6 +20,13 @@ warm_months = unique(format(warm_month_dates, '%Y_%m'))
 all_years = unique(format(warm_month_dates, '%Y'))
 # tz = "America/New York"
 
+temperatureexcess <- function(temperature, threshold = 18.333){
+  pmax(temperature, threshold) - threshold
+}
+setDTthreads(threads = 15)
+
+# MODIS-based model predictions ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ####
+
 all_files = apply(expand.grid(warm_months, c('h1.fst', 'h2.fst')), MARGIN = 1, 
                   FUN = paste0, collapse = '_')
 all_files_2000CTs = sort(all_files)[1:70]
@@ -25,9 +35,6 @@ all_files_2010CTs = sort(all_files)[71:170]
 path_preds = '/data-coco/NEMIA_temperature/saved-predictions/all_monthly/'
 save_hourly_CT_to = "/home/carrid08/northeast_temperature_disparities/data/hourly_tract_preds/"
 
-temperatureexcess <- function(temperature, threshold = 18.333){
-  pmax(temperature, threshold) - threshold
-}
 
 create_tract_hourly_summaries <- function(fst_file, tract_weights){
   
@@ -42,8 +49,6 @@ create_tract_hourly_summaries <- function(fst_file, tract_weights){
   write_fst(weighted_hourly_bytract, file.path(save_hourly_CT_to, fst_file))
 }
 
-
-setDTthreads(threads = 15)
 lapply(all_files_2000CTs, FUN = create_tract_hourly_summaries, t00weights)
 lapply(all_files_2010CTs, FUN = create_tract_hourly_summaries, t10weights)
 
@@ -82,3 +87,6 @@ produce_daily_summaries <- function(year){
 NEMIA_daily_summaries_all_years <- lapply(all_years, produce_daily_summaries)
 NEMIA_daily_summaries_all_years <- rbindlist(NEMIA_daily_summaries_all_years)
 write.fst(NEMIA_daily_summaries_all_years, "/home/carrid08/northeast_temperature_disparities/data/summarized_daily_temp_preds.fst")
+
+# NLDAS reanalysis data  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ####
+
