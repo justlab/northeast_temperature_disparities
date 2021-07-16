@@ -63,7 +63,7 @@ produce_daily_summaries <- function(year){
   
   daily_temps_and_cdds <- all_temps_per_summer[, .(mean_temp_daily = mean(w_temp),
                                                    mean_htindx_daily = mean(w_temp_heatindex),
-                                                   noaa_mean = ((max(w_temp) - min(w_temp))/2)+min(w_temp)), 
+                                                   noaa_mean = ((max(w_temp) + min(w_temp))/2)), 
                                                by = .(GEOID, date)]
   
   daily_temps_and_cdds[, cdd := temperatureexcess(mean_temp_daily - 273.15), by = c("GEOID", "date")]
