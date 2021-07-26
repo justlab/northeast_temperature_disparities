@@ -13,35 +13,35 @@ download = function(url, to, f, ...){
         ...)
 }
 
+
+#### Load Data ####
 data.root <- here("data")
 
 # grab the Zip code energy data as a csv
 # get the Zip monthly electric dataset from #https://data.ny.gov/Energy-Environment/Utility-Energy-Registry-Monthly-ZIP-Code-Energy-Us/tzb9-c2c6
-get.electric <- function() download(
+get.electric.zip <- function() download(
     "https://data.ny.gov/api/views/tzb9-c2c6/rows.csv?accessType=DOWNLOAD&sorting=true",
-    to = "electric.csv",
-    function(p) fread(p)
-)
-electric <- get.electric()
-electric[, rowid := .I]
-
-# how many ZIPs with how many months with non-zero residential data by year?
-electric[data_class == "electricity" & 
+    to = "electric_zip.csv",
+    function(p) {
+      dat <- fread(p)
+      dat <- dat[data_class == "electricity" & 
       data_field == "1_nat_consumption" & 
-      value > 0, .N, 
-    by = .(zip_code,year)][, table(N, year)]
+      value > 0]
+    })
+electric.zip <- get.electric.zip()
 
-# who are the data sources?
-electric[data_class == "electricity" & 
+# grab the city/town/village energy data as a csv
+# get the monthly town/county electric dataset from #https://data.ny.gov/Energy-Environment/Utility-Energy-Registry-Monthly-ZIP-Code-Energy-Us/tzb9-c2c6
+get.electric.town <- function() download(
+    "https://data.ny.gov/api/views/m3xm-q3dw/rows.csv?accessType=DOWNLOAD&sorting=true",
+    to = "electric_town.csv",
+    function(p) {
+      dat <- fread(p)
+      dat <- dat[data_class == "electricity" & 
       data_field == "1_nat_consumption" & 
-      value > 0, table(utility_display_name, year)]
-
-# use the Georeference field as Well Known Text to create an sf object for mapping
-electricsf <- st_as_sf(electric, wkt = "Georeference", crs = 4326)
-
-# interactive map for the 2016 data -- takes a moment
-mapview(electricsf[electricsf$data_class == "electricity" & electricsf$data_field == "1_nat_consumption" & 
-      electricsf$value > 0 & electricsf$year == "2016",])
+      value > 0]
+    })
+electric.town <- get.electric.town()
 
 # grab utility service areas: https://data.ny.gov/Energy-Environment/NYS-Electric-Utility-Service-Territories/q5m9-rahr
 get.utilities <- function() download(
@@ -49,17 +49,44 @@ get.utilities <- function() download(
     to = "NYS_electric_utilities.zip",
     function(p) read_sf(paste0("/vsizip/", p))
 )
-utilities_sf <- get.utilities()
+utilities.sf <- get.utilities()
+
+# grab civil boundaries for cities/towns and villages
+# http://gis.ny.gov/gisdata/inventories/details.cfm?DSID=927
+get.civil.boundaries <- function() download(
+    "http://gis.ny.gov/gisdata/fileserver/?DSID=927&file=NYS_Civil_Boundaries.shp.zip",
+    to = "NYS_civil_boundaries.shp.zip",
+    function(p) {
+      unzip(p, exdir = file.path(data.root, "downloads"))
+    })
+civil.boundaries.sf <- get.civil.boundaries()
+villages.sf <- read_sf(file.path(data.root, "downloads", "Villages.shp"))
+towns.sf <- read_sf(file.path(data.root, "downloads", "Cities_Towns.shp"))
+
+
+#### data exploration - ZIPs ####
+
+# how many ZIPs with how many months with non-zero residential data by year?
+electric.zip[, .N, 
+    by = .(zip_code,year)][, table(N, year)]
+
+# who are the data sources?
+electric.zip[, table(utility_display_name, year)]
+
+# use the Georeference field as Well Known Text to create an sf object for mapping
+electric.zip.sf <- st_as_sf(electric.zip, wkt = "Georeference", crs = 4326)
+
+# interactive map for the 2016 data -- takes a moment
+mapview(electric.zip.sf[electric.zip.sf$year == "2016",])
+
 
 # map with utility service areas on top
-mapview(electricsf[electricsf$data_class == "electricity" & electricsf$data_field == "1_nat_consumption" & 
-      electricsf$value > 0 & electricsf$year == "2016",]) + mapview(utilities_sf, zcol = "comp_short")
+mapview(electric.zip.sf[electric.zip.sf$year == "2016",], zcol = "utility_display_name") + mapview(utilities.sf, zcol = "comp_short")
 
 # plot of monthly usage for NYC (ConEd)
 # exclude a zip with only 1 account
-electric[, zip.year := paste(zip_code, year, sep = ".")]
-ggplot(electric[zip_code != 11439 & data_class == "electricity" & data_field == "1_nat_consumption" & 
-+       value > 0 & utility_display_name == "Consolidated Edison",], aes(month, value/number_of_accounts)) + 
+electric.zip[, zip.year := paste(zip_code, year, sep = ".")]
+ggplot(electric.zip[zip_code != 11439 & utility_display_name == "Consolidated Edison",], aes(month, value/number_of_accounts)) + 
   geom_line(aes(group = zip.year), alpha = 0.05) + 
   geom_boxplot(aes(group = month), alpha = 0.15) + 
   ylab("MWh/account") + 
@@ -67,15 +94,15 @@ ggplot(electric[zip_code != 11439 & data_class == "electricity" & data_field == 
   theme_bw()
 
 # distribution of the number of accounts
-ggplot(electric[data_class == "electricity" & data_field == "1_nat_consumption" & 
-       value > 0,], aes(number_of_accounts)) + geom_histogram() + 
+ggplot(electric.zip, aes(number_of_accounts)) + geom_histogram(bins=50, aes(fill = utility_display_name)) + 
   scale_x_log10()
-electric[data_class == "electricity" & data_field == "1_nat_consumption" & 
-       value > 0, uniqueN(number_of_accounts), by = zip_code][, table(V1)]
 
 # a campus zip with a single account
-electric[data_class == "electricity" & data_field == "1_nat_consumption" & 
-           value > 0 & utility_display_name == "Consolidated Edison" & value/number_of_accounts > 5,]
+electric.zip[utility_display_name == "Consolidated Edison" & value/number_of_accounts > 5,]
+
+# among zips with incomplete records
+# which months are present/missing before 2020? is there a pattern in the month(s) of suppression?
+electric.zip[year < 2020, uniqueN(month), by = zip.year][V1 < 12][,table(V1)]
 
 # function to pull 2018 ACS data 
 acs.main <- function(admin_unit = c("zcta", "tract"), state_unit = c(NULL, "NY"), sf_shapes = c(TRUE, FALSE)) {
@@ -129,22 +156,44 @@ setDT(acs.dt)
 acs.dt[, zip_code := as.numeric(GEOID),]
 
 # merge the total population into the electricity data
-setkey(electric, "zip_code")
+setkey(electric.zip, "zip_code")
 setkey(acs.dt, "zip_code")
-electric[acs.dt, total_pop1 := total_pop1]
+electric.zip[acs.dt, total_pop1 := total_pop1]
 
 # looks like we will need a population for 11249 
 acs.dt[zip_code == 11249, ]
-electric[zip_code == 11249 & data_class == "electricity" & 
+electric.zip[zip_code == 11249 & data_class == "electricity" & 
            data_field == "1_nat_consumption" & value > 0, 
          .(year, month, zip_code, value, number_of_accounts, total_pop1)]
 
-ggplot(electric[zip_code != 11439 & data_class == "electricity" & data_field == "1_nat_consumption" & 
-+       value > 0 & utility_display_name == "Consolidated Edison",], aes(month, value/total_pop1)) + 
+ggplot(electric.zip[zip_code != 11439 & utility_display_name == "Consolidated Edison",], aes(month, value/total_pop1)) + 
   geom_line(aes(group = zip.year), alpha = 0.05) + 
   geom_boxplot(aes(group = month), alpha = 0.15) + 
   ylab("MWh per person") + 
   scale_x_discrete(limits = month.abb) + 
   theme_bw()
+
+#### data exploration - towns ####
+
+# First electric record
+electric.town.first <- electric.town[J(unique(full_fips)), mult = "first", on = "full_fips"]
+# how many of each type of civil unit?
+electric.town.first[, table(com_type)]
+
+# how many unique geographic entities?
+electric.town[, uniqueN(com_name)]# 1136
+# but note that some have more than one unique fips
+electric.town[, uniqueN(full_fips)]# 1334
+electric.town[, .(uniqueN(full_fips)), by = com_name][V1 > 1][, table(V1)]
+# distribution of length of full_fips
+electric.town[, table(nchar(unique(full_fips)))]
+
+# use the Georeference field as Well Known Text to create an sf object for mapping
+# note that 1 Town (com_name == "Ava") doesn't have a Georeference
+electric.town.sf <- st_as_sf(electric.town[com_name != "Ava", ], wkt = "Georeference", crs = 4326)
+mapview(electric.town.sf[electric.town.sf$year == 2016,], col.regions = "red") + mapview(electric.zip.sf[electric.zip.sf$year == "2016",])
+
+ggplot(electric.town, aes(number_of_accounts)) + geom_histogram(bins=50, aes(fill = utility_display_name)) + 
+  scale_x_log10(labels = scales::comma)
 
 # end of file
