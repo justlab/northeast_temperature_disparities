@@ -1,6 +1,6 @@
 library(data.table)
 library(fst)
-library(future.apply)
+# library(future.apply)
 library(lubridate)
 # also dependent on 'weathermetrics' and 'humidity' packages being installed,
 # but they don't need to be loaded
@@ -11,7 +11,7 @@ t10weights = read_fst('/data-coco/NEMIA_temperature/weights/nemia_tracts_2010_po
 t00_nldas = read_fst('/data-coco/NEMIA_temperature/weights/nemia_NLDAS_tracts_2000_popdens.fst', as.data.table = TRUE)
 t10_nldas = read_fst('/data-coco/NEMIA_temperature/weights/nemia_NLDAS_tracts_2010_popdens.fst', as.data.table = TRUE)
 
-sample_half_month <- read_fst('/data-coco/NEMIA_temperature/saved-predictions/all_monthly/2003_05_h1.fst', as.data.table = T)
+# sample_half_month <- read_fst('/data-coco/NEMIA_temperature/saved-predictions/all_monthly/2003_05_h1.fst', as.data.table = T)
 
 start_date = as.Date('2003-05-01')
 end_date = as.Date('2019-09-30')
@@ -171,3 +171,38 @@ nldas_times_10 = lapply(all_years[all_years >= 2010], FUN = nldas_tract_hourly_s
                         tract_weights = t10_nldas) 
 
 # Next: NLDAS daily summaries, including CDD & CDH
+
+NLDAS_year_files <- list.files(nldas_output, full.names = T)
+
+produce_daily_summaries_NLDAS <- function(NLDAS_year){
+  
+  # files_per_year <- all_files[all_files %like% as.expression(year)] 
+  # all_temps_per_summer <- lapply(files_per_year, read_files)
+  # all_temps_per_summer <- rbindlist(all_temps_per_summer)
+  #all_temps_per_summer[, ground.time.nominal := format.POSIXct(ground.time.nominal, tz = "America/New_York")]
+
+  all_temps_per_summer <- read_fst(NLDAS_year, as.data.table = T)
+  all_temps_per_summer[, date := as.Date(dtime)]
+  
+  daily_temps_and_cdds <- all_temps_per_summer[, .(mean_temp_daily = mean(w_temp),
+                                                   mean_htindx_daily = mean(w_temp_heatindex),
+                                                   noaa_mean = ((max(w_temp) + min(w_temp))/2)), 
+                                               by = .(GEOID, date)]
+  
+  daily_temps_and_cdds[, cdd := temperatureexcess(mean_temp_daily - 273.15), by = c("GEOID", "date")]
+  
+  evening_hours = all_temps_per_summer[hour(dtime)<=6 | hour(dtime)>=18]
+  evening_hours[, evening_cdh := temperatureexcess(w_temp - 273.15), by = c("GEOID", "dtime")]
+  
+  daily_cdhs = evening_hours[, .(nighttime.cdh = sum(evening_cdh, na.rm = T)),
+                             by = .(GEOID, date)]
+  
+  all_exposures <- daily_temps_and_cdds[daily_cdhs, on = c("GEOID", "date"), nomatch = 0, allow.cartesian = TRUE]
+  
+  return(all_exposures)
+}
+
+NLDAS_daily_summaries_all_years <- lapply(NLDAS_year_files, produce_daily_summaries_NLDAS)
+NLDAS_daily_summaries_all_years <- rbindlist(NLDAS_daily_summaries_all_years)
+write.fst(NLDAS_daily_summaries_all_years, "/home/carrid08/northeast_temperature_disparities/data/summarized_daily_temp_NLDAS.fst", compress = 100)
+
