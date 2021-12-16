@@ -10,7 +10,7 @@ t00weights = read_fst('/data-coco/NEMIA_temperature/weights/nemia_tracts_2000_po
 t10weights = read_fst('/data-coco/NEMIA_temperature/weights/nemia_tracts_2010_popdens.fst', as.data.table = TRUE)
 t00_nldas = read_fst('/data-coco/NEMIA_temperature/weights/nemia_NLDAS_tracts_2000_popdens.fst', as.data.table = TRUE)
 t10_nldas = read_fst('/data-coco/NEMIA_temperature/weights/nemia_NLDAS_tracts_2010_popdens.fst', as.data.table = TRUE)
-
+t10_zcta_nemia = read_fst('/data-coco/NEMIA_temperature/weights/nemia_zcta_2010_popdens.fst', as.data.table = TRUE)
 # sample_half_month <- read_fst('/data-coco/NEMIA_temperature/saved-predictions/all_monthly/2003_05_h1.fst', as.data.table = T)
 
 start_date = as.Date('2003-05-01')
@@ -24,7 +24,7 @@ all_years = unique(format(warm_month_dates, '%Y'))
 temperatureexcess <- function(temperature, threshold = 18.333){
   pmax(temperature, threshold) - threshold
 }
-setDTthreads(threads = 15)
+setDTthreads(threads = 10)
 
 # MODIS-based model predictions ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ####
 
@@ -205,4 +205,67 @@ produce_daily_summaries_NLDAS <- function(NLDAS_year){
 NLDAS_daily_summaries_all_years <- lapply(NLDAS_year_files, produce_daily_summaries_NLDAS)
 NLDAS_daily_summaries_all_years <- rbindlist(NLDAS_daily_summaries_all_years)
 write.fst(NLDAS_daily_summaries_all_years, "/home/carrid08/northeast_temperature_disparities/data/summarized_daily_temp_NLDAS.fst", compress = 100)
+
+# NEMIA zcta summaries  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ####
+
+#only need 2016-2019
+all_files = apply(expand.grid(warm_months, c('h1.fst', 'h2.fst')), MARGIN = 1, 
+                  FUN = paste0, collapse = '_')
+all_files_2010CTs = sort(all_files)[71:170]
+
+path_preds = '/data-coco/NEMIA_temperature/saved-predictions/all_monthly/'
+save_hourly_zctas_to = "/home/carrid08/northeast_temperature_disparities/data/hourly_zcta_preds/"
+
+create_zcta_hourly_summaries <- function(fst_file, zcta_weights){
+  
+  temp =  read_fst(file.path(path_preds, fst_file), as.data.table = T)
+  
+  joined = zcta_weights[temp, on = 'gid', nomatch = 0, allow.cartesian = TRUE]
+  weighted_hourly_byzcta = joined[, .(w_temp = sum(pred.temp.K * popdens * coverage_area, na.rm = T)/
+                                         sum(popdens * coverage_area, na.rm = T),
+                                       w_temp_heatindex = sum(pred.heat.index.K * popdens * coverage_area, na.rm = T)/
+                                         sum(popdens * coverage_area, na.rm = T)),
+                                   by = .(GEOID, ground.time.nominal)]
+  write_fst(weighted_hourly_byzcta, file.path(save_hourly_zctas_to, fst_file), compress = 100)
+}
+
+lapply(all_files_2010CTs, FUN = create_zcta_hourly_summaries, t10_zcta_nemia)
+
+##
+read_files <- function(fst_file){
+  read_fst(file.path(save_hourly_zctas_to, fst_file), as.data.table = T)
+}
+
+produce_daily_summaries <- function(year){ 
+  
+  files_per_year <- all_files[all_files %like% as.expression(year)] 
+  all_temps_per_summer <- lapply(files_per_year, read_files)
+  all_temps_per_summer <- rbindlist(all_temps_per_summer)
+  
+  all_temps_per_summer[, ground.time.nominal := format.POSIXct(ground.time.nominal, tz = "America/New_York")]
+  all_temps_per_summer[, date := as.Date(ground.time.nominal)]
+  
+  daily_temps_and_cdds <- all_temps_per_summer[, .(mean_temp_daily = mean(w_temp),
+                                                   mean_htindx_daily = mean(w_temp_heatindex),
+                                                   noaa_mean = ((max(w_temp) + min(w_temp))/2)), 
+                                               by = .(GEOID, date)]
+  
+  daily_temps_and_cdds[, cdd := temperatureexcess(mean_temp_daily - 273.15), by = c("GEOID", "date")]
+  
+  evening_hours = all_temps_per_summer[hour(ground.time.nominal)<=6 | hour(ground.time.nominal)>=18]
+  evening_hours[, evening_cdh := temperatureexcess(w_temp - 273.15), by = c("GEOID", "ground.time.nominal")]
+  
+  daily_cdhs = evening_hours[, .(nighttime.cdh = sum(evening_cdh, na.rm = T)),
+                             by = .(GEOID, date)]
+  
+  all_exposures <- daily_temps_and_cdds[daily_cdhs, on = c("GEOID", "date"), nomatch = 0, allow.cartesian = TRUE]
+  
+  return(all_exposures)
+}
+
+zcta_years <- as.character(seq.int(2010,2019))
+NEMIA_zcta_summaries_all_years <- lapply(zcta_years, produce_daily_summaries)
+NEMIA_zcta_summaries_all_years <- rbindlist(NEMIA_zcta_summaries_all_years)
+write.fst(NEMIA_zcta_summaries_all_years, "/home/carrid08/northeast_temperature_disparities/data/summarized_daily_zcta_temp_preds.fst", compress = 100)
+
 

@@ -30,7 +30,10 @@ faqsd_pm_nemia <- function(load_year){
   pm_faqsd[, date := (if (alt_format) lubridate::mdy else lubridate::ymd)(date)]
   pm_faqsd
 }
-#pm_faqsd_05 = faqsd_pm_nemia(2005)
+
+faqsd_pm_2013_2017 <- lapply(seq.int(2003, 2017), faqsd_pm_nemia)
+faqsd_pm_2013_2017 <- rbindlist(faqsd_pm_2013_2017)
+faqsd_pm_2013_2017_warm <- faqsd_pm_2013_2017[month(date)>=5 & month(date)<=9]
 
 # ozone:
 faqsd_ozone_nemia <- function(load_year){
@@ -52,4 +55,11 @@ faqsd_ozone_nemia <- function(load_year){
   oz_faqsd[, date := (if (alt_format) lubridate::mdy else lubridate::ymd)(date)]
   oz_faqsd
 }
-#ozone_faqsd_05 <- faqsd_ozone_nemia(2005)
+
+faqsd_ozone_2013_2017 <- lapply(seq.int(2003, 2017), faqsd_ozone_nemia)
+faqsd_ozone_2013_2017 <- rbindlist(faqsd_ozone_2013_2017)
+faqsd_ozone_2013_2017_warm <- faqsd_ozone_2013_2017[month(date)>=5 & month(date)<=9]
+
+faqsd_O3_pm_warm_months <- faqsd_ozone_2013_2017_warm[faqsd_pm_2013_2017_warm, on = c("FIPS", "date"), nomatch = 0, allow.cartesian = TRUE]
+rm(faqsd_ozone_2013_2017, faqsd_ozone_2013_2017_warm, faqsd_pm_2013_2017, faqsd_pm_2013_2017_warm)
+write_fst(faqsd_O3_pm_warm_months, "/home/carrid08/northeast_temperature_disparities/data/faqsd_pm_and_O3_warmmths.fst")
