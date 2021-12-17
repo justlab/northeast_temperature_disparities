@@ -21,9 +21,11 @@ warm_months = unique(format(warm_month_dates, '%Y_%m'))
 all_years = unique(format(warm_month_dates, '%Y'))
 # tz = "America/New York"
 
-temperatureexcess <- function(temperature, threshold = 18.333){
+temperatureexcess <- function(temperature, threshold = 65){
   pmax(temperature, threshold) - threshold
 }
+FtoK = function(fahrenheit) (5/9) * (fahrenheit + 459.67)
+KtoF = function(kelvins) (9/5) * kelvins - 459.67
 setDTthreads(threads = 10)
 
 # MODIS-based model predictions ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ####
@@ -72,10 +74,10 @@ produce_daily_summaries <- function(year){
                                                    noaa_mean = ((max(w_temp) + min(w_temp))/2)), 
                                                by = .(GEOID, date)]
   
-  daily_temps_and_cdds[, cdd := temperatureexcess(mean_temp_daily - 273.15), by = c("GEOID", "date")]
+  daily_temps_and_cdds[, cdd := temperatureexcess(KtoF(mean_temp_daily)), by = c("GEOID", "date")]
   
   evening_hours = all_temps_per_summer[hour(ground.time.nominal)<=6 | hour(ground.time.nominal)>=18]
-  evening_hours[, evening_cdh := temperatureexcess(w_temp - 273.15), by = c("GEOID", "ground.time.nominal")]
+  evening_hours[, evening_cdh := temperatureexcess(KtoF(w_temp)), by = c("GEOID", "ground.time.nominal")]
   
   daily_cdhs = evening_hours[, .(nighttime.cdh = sum(evening_cdh, na.rm = T)),
                              by = .(GEOID, date)]
@@ -87,7 +89,7 @@ produce_daily_summaries <- function(year){
 
 NEMIA_daily_summaries_all_years <- lapply(all_years, produce_daily_summaries)
 NEMIA_daily_summaries_all_years <- rbindlist(NEMIA_daily_summaries_all_years)
-write.fst(NEMIA_daily_summaries_all_years, "/home/carrid08/northeast_temperature_disparities/data/summarized_daily_temp_preds.fst", compress = 100)
+write.fst(NEMIA_daily_summaries_all_years, "/home/carrid08/northeast_temperature_disparities/data/summarized_daily_temp_preds_F.fst", compress = 100)
 
 # NLDAS reanalysis data  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ####
 
@@ -95,8 +97,6 @@ nldas_path = '/data-belle/NLDAS/processed/hourly/conus/'
 nldas_output = '/home/carrid08/northeast_temperature_disparities/data/hourly_tract_preds_nldas/'
 if(!dir.exists(nldas_output)) dir.create(nldas_output)
 
-FtoK = function(fahrenheit) (5/9) * (fahrenheit + 459.67)
-KtoF = function(kelvins) (9/5) * kelvins - 459.67
 # using same function as in NEMIA_temperature for consistency
 heat_index = function(temp.K, spec.humid, pressure.Pa){
   FtoK(weathermetrics::heat.index(
@@ -189,10 +189,10 @@ produce_daily_summaries_NLDAS <- function(NLDAS_year){
                                                    noaa_mean = ((max(w_temp) + min(w_temp))/2)), 
                                                by = .(GEOID, date)]
   
-  daily_temps_and_cdds[, cdd := temperatureexcess(mean_temp_daily - 273.15), by = c("GEOID", "date")]
+  daily_temps_and_cdds[, cdd := temperatureexcess(KtoF(mean_temp_daily)), by = c("GEOID", "date")]
   
   evening_hours = all_temps_per_summer[hour(dtime)<=6 | hour(dtime)>=18]
-  evening_hours[, evening_cdh := temperatureexcess(w_temp - 273.15), by = c("GEOID", "dtime")]
+  evening_hours[, evening_cdh := temperatureexcess(KtoF(w_temp)), by = c("GEOID", "dtime")]
   
   daily_cdhs = evening_hours[, .(nighttime.cdh = sum(evening_cdh, na.rm = T)),
                              by = .(GEOID, date)]
@@ -204,7 +204,7 @@ produce_daily_summaries_NLDAS <- function(NLDAS_year){
 
 NLDAS_daily_summaries_all_years <- lapply(NLDAS_year_files, produce_daily_summaries_NLDAS)
 NLDAS_daily_summaries_all_years <- rbindlist(NLDAS_daily_summaries_all_years)
-write.fst(NLDAS_daily_summaries_all_years, "/home/carrid08/northeast_temperature_disparities/data/summarized_daily_temp_NLDAS.fst", compress = 100)
+write.fst(NLDAS_daily_summaries_all_years, "/home/carrid08/northeast_temperature_disparities/data/summarized_daily_temp_NLDAS_F.fst", compress = 100)
 
 # NEMIA zcta summaries  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ####
 
@@ -250,10 +250,10 @@ produce_daily_summaries <- function(year){
                                                    noaa_mean = ((max(w_temp) + min(w_temp))/2)), 
                                                by = .(GEOID, date)]
   
-  daily_temps_and_cdds[, cdd := temperatureexcess(mean_temp_daily - 273.15), by = c("GEOID", "date")]
+  daily_temps_and_cdds[, cdd := temperatureexcess(KtoF(mean_temp_daily)), by = c("GEOID", "date")]
   
   evening_hours = all_temps_per_summer[hour(ground.time.nominal)<=6 | hour(ground.time.nominal)>=18]
-  evening_hours[, evening_cdh := temperatureexcess(w_temp - 273.15), by = c("GEOID", "ground.time.nominal")]
+  evening_hours[, evening_cdh := temperatureexcess(KtoF(w_temp)), by = c("GEOID", "ground.time.nominal")]
   
   daily_cdhs = evening_hours[, .(nighttime.cdh = sum(evening_cdh, na.rm = T)),
                              by = .(GEOID, date)]
@@ -266,6 +266,6 @@ produce_daily_summaries <- function(year){
 zcta_years <- as.character(seq.int(2010,2019))
 NEMIA_zcta_summaries_all_years <- lapply(zcta_years, produce_daily_summaries)
 NEMIA_zcta_summaries_all_years <- rbindlist(NEMIA_zcta_summaries_all_years)
-write.fst(NEMIA_zcta_summaries_all_years, "/home/carrid08/northeast_temperature_disparities/data/summarized_daily_zcta_temp_preds.fst", compress = 100)
+write.fst(NEMIA_zcta_summaries_all_years, "/home/carrid08/northeast_temperature_disparities/data/summarized_daily_zcta_temp_preds_F.fst", compress = 100)
 
 
