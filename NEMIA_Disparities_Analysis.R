@@ -2,7 +2,7 @@ library(tidyverse)
 library(tidycensus)
 library(here)
 library(fst)
-library(VGAM)
+# library(VGAM)
 library(sf)
 #install.packages("lme4")
 library(lme4)
@@ -10,7 +10,7 @@ library(fst)
 library(lubridate)
 library(ggridges)
 #install.packages("eia")
-library(eia)
+# library(eia)
 library(patchwork)
 #install.packages("furrr")
 library(furrr)
@@ -24,75 +24,17 @@ library(metR)
 
 #### Pull in data ####
 
-eia_set_key("bec9cb5a80492dae86ecdc49f753ea4f")
+# eia_set_key("bec9cb5a80492dae86ecdc49f753ea4f")
 # WONDER_CVD_Mortality_65plus_total_re <- read_tsv(here("data","WONDER_CVD_deaths_65plus_total_2003_19.txt")) #replacement
 # WONDER_CVD_Mortality_65plus_byRace_re <- read_tsv(here("data","WONDER_CVD_deaths_65plus_byRace_2003_19.txt")) #replacement
 # WONDER_CVD_Mortality_65plus_byHispLat <- read_tsv(here("data","WONDER_CVD_deaths_65plus_byHispLat_2010_17.txt"))
 
-WONDER_CVD_Mortality_65plus_total_re <- read_tsv(here("data","WONDER_CVD_deaths_65plus_total_2010_17_May_Sept.txt")) #replacement
-WONDER_CVD_Mortality_65plus_byRace_re <- read_tsv(here("data","WONDER_CVD_deaths_65plus_Race_2010_17_May_Sept.txt"))
-WONDER_CVD_Mortality_65plus_byHispLat <- read_tsv(here("data","WONDER_CVD_deaths_65plus_byHispLat_2010_17_May_Sept.txt"))
-WONDER_CVD_Mortality_65plus_BIPOC <- read_tsv(here("data","WONDER_CVD_deaths_65plus_BIPOC_2010_17_May_Sept.txt"))
 
 # Temperatures <- read_rds(here("/data-coco/NEMIA_temperature/cdh/cdh_tractsSF_2019_06-08.rds")) #to erase
 Temperatures_XGBoost <- read_fst(here("data", "summarized_daily_temp_preds.fst")) 
 Temperatures_NLDAS <- read_fst(here("data", "summarized_daily_temp_NLDAS.fst")) 
 
-air_pollution <- read_fst(here("data", "faqsd_pm_and_O3_warmmths.fst"))
 
-EIA_CDDs <- read_csv(here("data", "9c._US_Regional_Weather_Data.csv"), skip = 4) 
-NEMIA_States <- c("09", "23", "25", "33", "44", "50", 
-                  "34", "36", "42",
-                  "10", "11", "24", "51", "54")
-
-EIA_regions <- tibble(Climate_Region = c("New England","New England","New England","New England","New England","New England",
-                                         "Middle Atlantic","Middle Atlantic","Middle Atlantic",
-                                         "South Atlantic", "South Atlantic","South Atlantic", "South Atlantic","South Atlantic"), 
-                      State_FIPS = c("09", "23", "25", "33", "44", "50", 
-                                     "34", "36", "42",
-                                     "10", "11", "24", "51", "54"))
-
-# NLDAS_Temps <- read_fst("/data-coco/NEMIA_temperature/cdh/cdh_bytract_2019_06-08_NLDAS.fst")
-
-CDD_MidAtlantic <- eia_series("TOTAL.ZWCDPC2.M") %>% unnest(8) %>% mutate(Climate_Region = "Middle Atlantic") %>% select(8:12)
-CDD_NewEngland <- eia_series("TOTAL.ZWCDPC1.M") %>% unnest(8) %>% mutate(Climate_Region = "New England") %>% select(8:12)
-CDD_SouthAtlantic <- eia_series("TOTAL.ZWCDPC5.M") %>% unnest(8) %>% mutate(Climate_Region = "South Atlantic") %>% select(8:12)
-
-SVI_tables <- mdb.get(here("data", "SVI2010_Counties.mdb"), tables = T)
-states_SVIs <- as.list(enframe(SVI_tables) %>%
-  filter(str_detect(value, "SVI") & !str_detect(value, "_Shape_Index")) %>%
-  select(value))[[1]]
-SVI <- mdb.get(here("data", "SVI2010_Counties.mdb"), tables = states_SVIs) 
-SVI <- data.table::rbindlist(SVI) %>%
-  #select(1:10,  S.PL.THEMES, R.PL.THEMES)
-  mutate(County_FIPS = as.character(STCOFIPS),
-         SVI_total = as.numeric(S.PL.THEMES),
-         SVI_quantile = as.numeric(R.PL.THEMES)) %>%
-  select(County_FIPS, SVI_total, SVI_quantile) %>% 
-  distinct(County_FIPS, .keep_all = T)
-  
-
-
-
-
-
-CDDs_EIA <- bind_rows(CDD_MidAtlantic, CDD_NewEngland, CDD_SouthAtlantic) %>%
-  filter(year>=2003 & year<=2019) %>%
-  filter(month(date)>=6 & month(date)<=8) %>%
-  group_by(year, Climate_Region) %>%
-  summarise(cdd_summer = sum(value))
-
-tract_2000_to_2010_links <- read_csv(here("data", "us2010trf.txt"), col_names = F) %>%
-  rename(state_fips_00 = "X1",
-         GEOID_00 = "X4",
-         GEOID_10 = "X13",
-         PART10 = "X16",
-         PctArea_of_2000 = "X21",
-         Pop2010 = "X25",
-         PctPop_2000 = "X26",
-         PctPop_2010 = "X27") %>%
-  filter(state_fips_00 %in% NEMIA_States) %>%
-  select(GEOID_00, GEOID_10, PART10, PctArea_of_2000, Pop2010, PctPop_2000, PctPop_2010)
 
 Convert_F_to_C <- function(temp_in_F) {
   
@@ -112,7 +54,7 @@ Convert_K_to_C <- function(temp){
 clean_and_summarize_temperatures <- function(temperature_df){
   
   cleaned_temp_df <- temperature_df %>%
-    filter(month(date)>=5 & month(date)<=9) %>% #was 6-8
+    filter(month(date)>=5 & month(date)<=9) %>% 
     mutate(year = year(date),
            noaa_mean_cdd = noaa_mean - 291.4833,
            noaa_mean_cdd = ifelse(noaa_mean_cdd<0, 0, noaa_mean_cdd)) %>%
@@ -131,75 +73,8 @@ clean_and_summarize_temperatures <- function(temperature_df){
 Temperatures_XGBoost <- clean_and_summarize_temperatures(Temperatures_XGBoost)
 Temperatures_NLDAS <- clean_and_summarize_temperatures(Temperatures_NLDAS)
 
-air_pollution_summaries <- air_pollution %>%
-  filter(month(date)>=5 & month(date)<=9) %>% #was 6-8
-  mutate(year = year(date), 
-         GEOID = FIPS) %>%
-  group_by(year, GEOID) %>%
-  summarise(mean_O3_summer = mean(ozone_pred),
-            mean_PM_summer = mean(pm25_pred))
 
-#Clean WONDER CVD Mortality 
-WONDER_CVD_Mortality_65plus_byRace_a <- WONDER_CVD_Mortality_65plus_byRace_re %>%
-   rename("year" = `Year Code`) %>%
-   filter(Race == "Black or African American"| Race == "White") %>%
-   mutate(Race = if_else(Race=="Black or African American", "Black", Race)) %>%
-   dplyr::select(`County Code`, Race, Deaths, year)
-
-WONDER_CVD_Mortality_65plus_total_a <- WONDER_CVD_Mortality_65plus_total_re %>%
-   rename("year" = `Year Code`) %>%
-   dplyr::select(`County Code`, Deaths, year) %>%
-   mutate(Race = "Total")
-
-WONDER_CVD_Mortality_65plus_HispLat_a <- WONDER_CVD_Mortality_65plus_byHispLat %>%
-  rename("year" = `Year Code`) %>%
-  filter(`Hispanic Origin` == "Hispanic or Latino") %>%
-  dplyr::select(`County Code`, Deaths, year) %>%
-  mutate(Race = "Latin")
-
-WONDER_CVD_Mortality_65plus_BIPOC_a <- WONDER_CVD_Mortality_65plus_BIPOC %>%
-  rename("year" = `Year Code`) %>%
-  dplyr::select(`County Code`, Deaths, year) %>%
-  mutate(Race = "BIPOC")
-
-WONDER_CVD_Mortality_65plus <- bind_rows(WONDER_CVD_Mortality_65plus_total_a, WONDER_CVD_Mortality_65plus_byRace_a, WONDER_CVD_Mortality_65plus_HispLat_a,
-                                         WONDER_CVD_Mortality_65plus_BIPOC_a) %>%
-   rename("County_FIPS" = "County Code")
-
-#Get Census Data
-# ACS_vars_2019 <- load_variables(2019, "acs5", cache = TRUE)
-#
-# View(ACS_vars_2019 %>%
-#   filter(concept == "POPULATION"))
-#
-# View(ACS_vars_2019 %>%
-#        filter(str_detect(label, "65")))
-
-calculate_annual_popdensity <- function(year){
-
-  County_PopDensity <- get_acs(geography = "county",
-         variables = c("total_pop" = "B01001_001"), 
-         year = year,
-         survey = "acs5",
-         output = "tidy",
-         geometry = T,
-         state = NEMIA_States) %>%
-   mutate(area = st_area(.),
-     pop_density =  estimate/area,
-     year = year) %>%
-   st_drop_geometry() %>%
-   dplyr::select(GEOID, pop_density, year)
-
- County_PopDensity %>% mutate(County_FIPS = str_sub(GEOID, 1,5)) %>% distinct(County_FIPS, .keep_all = T)
-
- return(County_PopDensity)
-}
-
-annual_pop_density <- lapply(seq.int(2009, 2017), calculate_annual_popdensity)
-annual_pop_density <- bind_rows(annual_pop_density)
-
-
-find_vars <- load_variables(2009, "acs5")
+# find_vars <- load_variables(2009, "acs5")
 find_vars_2000dec <- load_variables(2000, "sf1")
 find_vars_2010dec <- load_variables(2010, "sf1")
 # find_vars_acsprofile <- load_variables(2009, "acs5/profile")
