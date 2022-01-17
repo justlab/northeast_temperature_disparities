@@ -2,65 +2,78 @@ library(tidyverse)
 library(tidycensus)
 library(here)
 library(fst)
-# library(VGAM)
 library(sf)
 #install.packages("lme4")
 library(lme4)
-library(fst)
 library(lubridate)
 library(ggridges)
-#install.packages("eia")
-# library(eia)
 library(patchwork)
-#install.packages("furrr")
 library(furrr)
 library(broom)
 library(ggforce)
 library(Hmisc)
 library(DescTools)
 library(metR)
-
-#install.packages("transformr") #dependency to render gganimate
+library(readxl)
 
 #### Pull in data ####
-
-# eia_set_key("bec9cb5a80492dae86ecdc49f753ea4f")
-# WONDER_CVD_Mortality_65plus_total_re <- read_tsv(here("data","WONDER_CVD_deaths_65plus_total_2003_19.txt")) #replacement
-# WONDER_CVD_Mortality_65plus_byRace_re <- read_tsv(here("data","WONDER_CVD_deaths_65plus_byRace_2003_19.txt")) #replacement
-# WONDER_CVD_Mortality_65plus_byHispLat <- read_tsv(here("data","WONDER_CVD_deaths_65plus_byHispLat_2010_17.txt"))
-
-
 # Temperatures <- read_rds(here("/data-coco/NEMIA_temperature/cdh/cdh_tractsSF_2019_06-08.rds")) #to erase
-Temperatures_XGBoost <- read_fst(here("data", "summarized_daily_temp_preds.fst")) 
-Temperatures_NLDAS <- read_fst(here("data", "summarized_daily_temp_NLDAS.fst")) 
+Temperatures_XGBoost <- read_fst(here("data", "summarized_daily_temp_preds_F.fst")) 
+Temperatures_NLDAS <- read_fst(here("data", "summarized_daily_temp_NLDAS_F.fst")) 
+KtoF = function(kelvins) (9/5) * kelvins - 459.67
+NEMIA_States <- c("09", "23", "25", "33", "44", "50", 
+                  "34", "36", "42",
+                  "10", "11", "24", "51", "54")
 
+get_RUCAs_2000 <- function(){
 
-
-Convert_F_to_C <- function(temp_in_F) {
+  if(!file.exists(here("data", "ruca_2000.xls"))){
   
-  temp_in_C = (temp_in_F - 32) * (5/9)
-  return(temp_in_C)
+    download.file("https://www.ers.usda.gov/webdocs/DataFiles/53241/ruca00.xls?v=543.7",
+                destfile = here("data", "ruca_2000.xls"))
   
+  }
+  
+  ruca_2000 <- read_xls(here("data", "ruca_2000.xls")) %>% 
+    rename("GEOID" = "State County Tract Code",
+           "RUCA_code1" = "RUCA Primary Code 2000",
+           "RUCA_code2" = "RUCA Secondary Code 2000") %>%
+    select(GEOID, RUCA_code1, RUCA_code2) %>%
+    mutate(census_year = 2000)
+  
+  return(ruca_2000)
 }
 
-Convert_K_to_C <- function(temp){
+get_RUCAs_2010 <- function(){
   
-  K <- temp - 273.15 
+  if (!file.exists(here("data", "ruca_2010.xlsx"))) {
   
-  return(K)
+    download.file("https://www.ers.usda.gov/webdocs/DataFiles/53241/ruca2010revised.xlsx?v=543.7",
+                  destfile = here("data", "ruca_2010.xlsx"))
+  }
+  
+  ruca_2010 <- read_xlsx(here("data", "ruca_2010.xlsx"), skip = 1) %>%
+    rename("GEOID" = "State-County-Tract FIPS Code (lookup by address at http://www.ffiec.gov/Geocode/)",
+           "RUCA_code1" = "Primary RUCA Code 2010",
+           "RUCA_code2" = "Secondary RUCA Code, 2010 (see errata)") %>%
+    select(GEOID, RUCA_code1, RUCA_code2) %>%
+    mutate(census_year = 2010)
+  
+  return(ruca_2010)
 }
+
 #### Data cleaning ####
 
-clean_and_summarize_temperatures <- function(temperature_df){
+clean_and_summarize_temperatures <- function(temperature_df){ #rename this to reflect summerwide summaries with cdds
   
   cleaned_temp_df <- temperature_df %>%
     filter(month(date)>=5 & month(date)<=9) %>% 
     mutate(year = year(date),
-           noaa_mean_cdd = noaa_mean - 291.4833,
+           noaa_mean_cdd = KtoF(noaa_mean) - 65,
            noaa_mean_cdd = ifelse(noaa_mean_cdd<0, 0, noaa_mean_cdd)) %>%
     group_by(year, GEOID) %>%
-    summarise(mean_temp_summer = mean(mean_temp_daily),
-              mean_htindx_summer = mean(mean_htindx_daily),
+    summarise(mean_temp_summer = KtoF(mean(mean_temp_daily)),
+              mean_htindx_summer = KtoF(mean(mean_htindx_daily)),
               cdd_summer = sum(cdd),
               nighttime.cdh_summer = sum(nighttime.cdh),
               noaa_cdd = sum(noaa_mean_cdd)) %>%
@@ -70,79 +83,167 @@ clean_and_summarize_temperatures <- function(temperature_df){
   return(cleaned_temp_df)
 }
 
-Temperatures_XGBoost <- clean_and_summarize_temperatures(Temperatures_XGBoost)
-Temperatures_NLDAS <- clean_and_summarize_temperatures(Temperatures_NLDAS)
 
+Temperatures_XGBoost_summer_avgs <- clean_and_summarize_temperatures(Temperatures_XGBoost)
+Temperatures_NLDAS_summer_avgs <- clean_and_summarize_temperatures(Temperatures_NLDAS)
 
-# find_vars <- load_variables(2009, "acs5")
 find_vars_2000dec <- load_variables(2000, "sf1")
 find_vars_2010dec <- load_variables(2010, "sf1")
-# find_vars_acsprofile <- load_variables(2009, "acs5/profile")
-# find_vars_acssubject <- load_variables(2009, "acs5/subject")
 
-# get_total_race_byTracts <- function(year){
-#   
-#   ACS_data_tract_race <- get_acs(geography = "tract",
-#                                         variables = c("Black" = "B03002_004",
-#                                                       "White" = "B03002_003",
-#                                                       "Latinx" = "B03002_012",
-#                                                       "Asian" = "B03002_006",
-#                                                       "Total_pop" = "B01001_001"),
-#                                         year = year,
-#                                         survey = "acs5", 
-#                                         output = "wide",
-#                                         state = NEMIA_States)
-# 
-#   ACS_data_tract_race1 <- ACS_data_tract_race %>%
-#     mutate(State_FIPS = str_sub(GEOID, 1, 2),
-#            County_FIPS = str_sub(GEOID, 1, 5)) %>%
-#     ungroup() %>%
-#     mutate(year = year)
-#   
-# return(ACS_data_tract_race1)
-# 
-# }
 
-Tract_RaceEthn_2000Census <- get_decennial(geography = "tract",
-                                           variables = c("Black" = "P004006",
-                                                         "White" = "P004005",
-                                                         #"Asian" = "P004008",
-                                                         "Latinx" = "P004002",
-                                                         "Total_pop" = "P004001"),
-                                           year = 2000,
-                                           survey = "sf1",
-                                           output = "wide",
-                                           state = NEMIA_States) %>%
-  mutate(census_year = 2000)
-
-Tract_RaceEthn_2010Census <- get_decennial(geography = "tract",
-                                           variables = c("Black" = "P005004",
-                                                         "White" = "P005003",
-                                                         #"Asian" = "P005006",
-                                                         "Latinx" = "P005010",
-                                                         "Total_pop" = "P004001"),
-                                           year = 2010,
-                                           survey = "sf1",
-                                           output = "wide",
-                                           state = NEMIA_States) %>%
-  mutate(census_year = 2010)
-
-Tract_RaceEthn_Census <- bind_rows(Tract_RaceEthn_2000Census, Tract_RaceEthn_2010Census) %>%
-  mutate(State_FIPS = str_sub(GEOID, 1, 2),
-         County_FIPS = str_sub(GEOID, 1, 5),
-         BIPOC = Total_pop - White,
-         ICE_black_seg = (Black - White) / Total_pop,
-         ICE_bipoc_seg = (BIPOC- White) / Total_pop,
-         ICE_latinx_seg = (Latinx - White) / Total_pop) #doing opposite calculation so that higher temp is associated with higher ICE
-
-tract_2000_to_2010_links1 <- tract_2000_to_2010_links %>%
-  filter(PctPop_2000 >=95 & GEOID_00 != GEOID_10)
-
-#### Visualize temperature differences by race/ethnicity #### 
-plot_densities <- function(temperature_df, census_df, temp_measure, start_year, end_year){
+get_Census_tract_data <- function(){
   
-  # temperature_df <- Temperatures_XGBoost
-  # census_df <- Tract_RaceEthn_Census
+  Tract_RaceEthn_2000Census <- get_decennial(geography = "tract",
+                                             variables = c("Black" = "P004006",
+                                                           "White" = "P004005",
+                                                           "Asian" = "P004008",
+                                                           "Latino" = "P004002",
+                                                           "Total_pop" = "P004001"),
+                                             year = 2000,
+                                             survey = "sf1",
+                                             output = "wide",
+                                             state = NEMIA_States) %>%
+    mutate(census_year = 2000) %>%
+    left_join(., get_RUCAs_2000(), by = c("GEOID", "census_year"))
+  
+  Tract_RaceEthn_2010Census <- get_decennial(geography = "tract",
+                                             variables = c("Black" = "P005004",
+                                                           "White" = "P005003",
+                                                           "Asian" = "P005006",
+                                                           "Latino" = "P005010",
+                                                           "Total_pop" = "P004001"),
+                                             year = 2010,
+                                             survey = "sf1",
+                                             output = "wide",
+                                             state = NEMIA_States) %>%
+    mutate(census_year = 2010) %>%
+    left_join(., get_RUCAs_2010(), by = c("GEOID", "census_year"))
+  
+  Tract_RaceEthn_Census <- bind_rows(Tract_RaceEthn_2000Census, Tract_RaceEthn_2010Census) %>%
+    mutate(State_FIPS = str_sub(GEOID, 1, 2),
+           County_FIPS = str_sub(GEOID, 1, 5),
+           BIPOC = Total_pop - White,
+           ICE_black_seg = (White - Black) / Total_pop,
+           ICE_bipoc_seg = (White - BIPOC) / Total_pop,
+           ICE_latinx_seg = (White - Latino) / Total_pop)
+  
+  return(Tract_RaceEthn_Census)
+
+}
+
+Tract_RaceEthn_Census <- get_Census_tract_data() 
+
+#grab a map to visualize 
+tract_2010_shp <- get_decennial(geography = "tract",
+              variables = c("Total_pop" = "P004001"),
+              year = 2010,
+              survey = "sf1",
+              output = "wide",
+              geometry = T, 
+              state = NEMIA_States)
+
+tract_2010_shp %>% 
+  inner_join(., Tract_RaceEthn_Census %>% filter(census_year == 2010 & !RUCA_code2 %in% metropolitan), by = "GEOID") %>%
+  ggplot() + 
+  geom_sf()
+
+#### Contour plots ####
+
+all_pred_filepaths <- list.files(here("data", "hourly_tract_preds"), full.names = T)
+create_weighted_race_hours_NEMIA <- function(year, urban = c("metropolitan", "not_metropolitan", "all")){
+  
+  metro = c(1.0, 1.1, 2.0, 2.1, 3.0, 4.1, 5.1, 7.1, 8.1, 10.1)
+  
+  year_i_pred_paths <- enframe(all_pred_filepaths) %>% filter(str_detect(value, year))
+  
+  year_i_preds <- year_i_pred_paths$value %>%
+    map_dfr(read_fst)
+  
+  summarized_day_hour <- year_i_preds %>%
+    mutate(ground.time.nominal = format.POSIXct(ground.time.nominal, tz = "America/New_York"),
+           year = year(ground.time.nominal),
+           census_year = if_else(year<=2009, 2000, 2010),
+           month = month(ground.time.nominal),
+           day = day(ground.time.nominal),
+           hour = hour(ground.time.nominal),
+           day_of_yr = yday(ground.time.nominal)) %>%
+    filter(month>=5 & month<=9) %>%
+    left_join(Tract_RaceEthn_Census, by = c("census_year", "GEOID")) 
+  
+  if(urban=="metropolitan"){
+    summarized_day_hour <- summarized_day_hour %>%
+      filter(RUCA_code2 %in% metro)
+  }
+  
+  if(urban=="not_metropolitan"){
+    summarized_day_hour <- summarized_day_hour %>%
+      filter(!RUCA_code2 %in% metro)
+  }  
+  
+  summarized_day_hour <- summarized_day_hour %>%
+    dplyr::select(year, month, hour, day_of_yr, w_temp, Black, White, Latino) %>% #change this for racial groups of interest
+    pivot_longer(cols = c("Black", "White", "Latino"), names_to = "race", values_to = "estimate") %>% #and this
+    group_by(month, year, hour, day_of_yr, race) %>%
+    summarise(monthhour_temp = matrixStats::weightedMedian(w_temp, estimate)) %>%
+    mutate(temp_f = KtoF(monthhour_temp),
+           date = as.Date(paste0(year,"-",day_of_yr), "%Y-%j")) %>% #try to make the y axis prettier
+    select(-monthhour_temp) 
+  
+  return(summarized_day_hour)
+  
+}
+
+plan(multisession(workers = 12))
+all_years <- as.character(seq.int(2003, 2019))
+
+race_hour_temps_NEMIA_metro <- all_years %>% 
+  future_map_dfr(., ~create_weighted_race_hours_NEMIA(.x, urban = "metropolitan"), .progress = T)
+race_hour_temps_NEMIA_notmetro <- all_years %>% 
+  future_map_dfr(., ~create_weighted_race_hours_NEMIA(.x, urban = "not_metropolitan"), .progress = T)
+
+make_contour_plot_by_race <- function(dataframe, year_to_plot){
+  
+  plot <- ggplot(dataframe %>% filter(year==year_to_plot), aes(date, hour, z = temp_f)) + #, breaks = c(0,12,18,24,30,36)
+    geom_contour_fill(aes(fill = stat(level)), breaks = c(32,55,65,75,90,105)) + 
+    facet_wrap(.~race, ncol = 1) + 
+    scale_x_date(labels = function(x) format(x, "%b")) +
+    scale_fill_divergent_discretised(low = "#4e714f", mid = "#e9cc78", high = "#984c45", midpoint = 65, 
+                                     name = "Temperature (°F)", guide = guide_coloursteps(show.limits = T, barwidth = 12)) +
+    scale_y_reverse(breaks = c(0,6,12,18,23), labels = c("12 AM", "6 AM", "12 PM", "6 PM", "11 PM")) + 
+    ylab("Hour of day") +
+    theme_minimal(base_size = 16) +
+    theme(legend.position = "bottom", axis.title.x=element_blank(), axis.title.y = element_blank()) 
+
+  return(plot)
+}
+
+make_contour_plot_by_race_and_development <- function(year_to_plot){
+  
+  plot_metro <- make_contour_plot_by_race(race_hour_temps_NEMIA_metro, year_to_plot) +
+    ggtitle("Metropolitan") + 
+    theme(axis.title.y = element_text("Hour of day", angle = 90),
+          plot.title = element_text(hjust = 0.5, vjust = 0.1)) 
+  
+  plot_nonmetro <- make_contour_plot_by_race(race_hour_temps_NEMIA_notmetro, year_to_plot) + 
+    ggtitle("Micropolitan and Rural") + 
+    theme(axis.text.y = element_blank(),
+          plot.title = element_text(hjust = 0.5))
+  
+  plot_metro_and_non <- (plot_metro + plot_nonmetro) + plot_layout(guides = 'collect') & 
+    #plot_annotation(title = paste("Air temperature by development type in", year_to_plot))  
+    theme(legend.position = 'bottom', plot.title = element_text(size = 14)) 
+
+return(plot_metro_and_non)
+  
+}
+
+make_contour_plot_by_race_and_development(2011)
+
+##leftoff here on 2022-01-16
+
+
+#### Visualize annual CDD density plots by race/ethnicity #### 
+plot_densities <- function(temperature_df, census_df, temp_measure, start_year, end_year){
   
   temperature_df1 <- temperature_df %>%
     left_join(., census_df, by = c("census_year", "GEOID")) %>%
@@ -1310,7 +1411,7 @@ zcta_energy %>% filter()
 #### hourly by race-county visualizations ####
 
 #make a function that subsets the list of paths by year, and then binds them, and then does the averaging
-all_pred_filepaths <- list.files(here("data", "hourly_tract_preds"), full.names = T)
+
 
 # create_weighted_race_hours <- function(all_pred_filepaths, year){#by county
 #   
@@ -1338,102 +1439,6 @@ all_pred_filepaths <- list.files(here("data", "hourly_tract_preds"), full.names 
 
 # race_hour_temps_2019 <- create_weighted_race_hours(all_pred_filepaths, "2019")
 
-create_weighted_race_hours_NEMIA <- function(year){#by county
-  
-  year_i_pred_paths <- enframe(all_pred_filepaths) %>% filter(str_detect(value, year))
-  
-  year_i_preds <- year_i_pred_paths$value %>%
-    map_dfr(read_fst)
-  
-  summarized_day_hour <- year_i_preds %>%
-    mutate(ground.time.nominal = format.POSIXct(ground.time.nominal, tz = "America/New_York"),
-           year = year(ground.time.nominal),
-           census_year = if_else(year<=2009, 2000, 2010),
-           month = month(ground.time.nominal),
-           day = day(ground.time.nominal),
-           hour = hour(ground.time.nominal),
-           day_of_yr = yday(ground.time.nominal)) %>%
-    left_join(Tract_RaceEthn_Census, by = c("census_year", "GEOID")) %>%
-    dplyr::select(year, month, hour, day_of_yr, w_temp, Black, White) %>%
-    filter(month>=5 & month<=9) %>%
-    pivot_longer(cols = c("Black", "White"), names_to = "race", values_to = "estimate") %>%
-    group_by(month, year, hour, day_of_yr, race) %>%
-    summarise(county_monthhour_temp = matrixStats::weightedMedian(w_temp, estimate)) %>%
-    mutate(temp_c = Convert_K_to_C(county_monthhour_temp),
-           date = as.Date(paste0(year,"-",day_of_yr), "%Y-%j")) %>% #try to make the y axis prettier
-    select(-county_monthhour_temp) 
-    
-  return(summarized_day_hour)
-}
-
-plan(multisession(workers = 8))
-all_years <- as.character(seq.int(2003, 2019))
-# race_hour_temps_NEMIA_2019 <- create_weighted_race_hours_NEMIA("2019")
-# 
-# race_hour_temps_NEMIA_2019_a <- race_hour_temps_NEMIA_2019 %>%
-#   mutate(temp_c = Convert_K_to_C(county_monthhour_temp),
-#          temp_c_cut = cut(temp_c, breaks = c(0,12,18,24,30,36), ordered_result = T),
-#          date = as.Date(paste0(year,"-",day_of_yr), "%Y-%j"))
-# 
-# ggplot(race_hour_temps_NEMIA_2019_a, aes(date, hour, z = temp_c)) + #, breaks = c(0,12,18,24,30,36)
-#   geom_contour_fill(aes(fill = stat(level))) + 
-#   #geom_contour_tanaka() +
-#   facet_wrap(.~race, ncol = 1) + 
-#   scale_x_date(labels = function(x) format(x, "%b")) +
-#   scale_fill_divergent_discretised(low = "blue", mid = "grey", high = "red4", midpoint = 20) +
-#   theme_minimal() + 
-#   xlab("2019")
-
-#categories?
-#>=30 (86F) = Hot
-#24-30 = Warm
-#18-24 = Comfortable
-#12-18 = Cool
-#0-12 = Cold
-
-race_hour_temps_NEMIA <- all_years %>% 
-  future_map_dfr(., ~create_weighted_race_hours_NEMIA(.x), .progress = T)
-
-#race_hour_temps_NEMIA_2010_a
-#race_2010_plot <- 
-ggplot(race_hour_temps_NEMIA %>% filter(year==2011), aes(date, hour, z = temp_c)) + #, breaks = c(0,12,18,24,30,36)
-  geom_contour_fill(aes(fill = stat(level)), breaks = c(0,12,18,24,32,40)) + 
-  #geom_contour_tanaka(breaks = c(0,12,18,24,30,40), ) +
-  #theme(axis.title.x = element_blank(), axis.title.y = element_blank(), axis) +
-  facet_wrap(.~race, ncol = 1) + 
-  scale_x_date(labels = function(x) format(x, "%b")) +
-  scale_fill_divergent_discretised(low = "#4e714f", mid = "#e9cc78", high = "#984c45", midpoint = 20, 
-                                   name = "Temperature (°C)", guide = guide_coloursteps(show.limits = T, barwidth = 12)) +
-  scale_y_reverse(breaks = c(0,6,12,18,23), labels = c("12 AM", "6 AM", "12 PM", "6 PM", "11 PM")) + 
-  ylab("Hour of day") +
-  xlab("Day of year, 2011") +
-  #scale_y_continuous(breaks = c(23,18,12,6,0)) + #, labels = c("12 AM", "6 AM", "12 PM", "6 PM", "11 PM") c(0,6,12,18,23)
-  theme_minimal(base_size = 16) +
-  theme(legend.position = "bottom") 
-  
-    # labs(title = 'Year: {frame_time}', x = 'Hour', y = 'Date') +
-    # transition_components(year) 
-  
-  for (i in unique(race_hour_temps_NEMIA$year)) {
-    
-    temp_plot = ggplot(data = subset(race_hour_temps_NEMIA, year == i), aes(date, hour, z = temp_c)) + #, breaks = c(0,12,18,24,30,36)
-      geom_contour_fill(aes(fill = stat(level)), breaks = c(0,12,18,24,32,40)) + 
-      #geom_contour_tanaka(breaks = c(0,12,15,17,20,25,30,35,40)) +
-      #theme(axis.title.x = element_blank(), axis.title.y = element_blank(), axis) +
-      facet_wrap(.~race, ncol = 1) + 
-      scale_x_date(labels = function(x) format(x, "%b")) +
-      scale_fill_divergent_discretised(low = "#4e714f", mid = "#e9cc78", high = "#984c45", midpoint = 20, 
-                                       name = "Temperature (°C)", guide = guide_coloursteps(show.limits = T, barwidth = 12)) +
-      scale_y_reverse(breaks = c(0,6,12,18,23), labels = c("12 AM", "6 AM", "12 PM", "6 PM", "11 PM")) + 
-      ylab("Hour of day") +
-      xlab(paste("Day of year,", i)) +
-      #scale_y_continuous(breaks = c(0,6,12,18,23), labels = c("12 AM", "6 AM", "12 PM", "6 PM", "11 PM")) +
-      theme_minimal(base_size = 14) +
-      theme(legend.position = "bottom")
-    
-    ggsave(temp_plot, file=paste0("plots/countour_plot_", i,".png"), width = 28, height = 18, units = "cm", dpi = 320)
-    
-  }
    
 race_hour_temps_NEMIA_2003 <- race_hour_temps_NEMIA %>%
   filter(year==2003) %>%
@@ -1462,7 +1467,7 @@ ggsave(pct_diff, file=here("plots", "contour_plot_2003diff.png"), width = 28, he
 #   ylab("Hour")
 
 
-# aes(fill = stat(level)), breaks = c(-10, -8, -6, -2, -1, 0, 6, 8, 10)
+
 ggplot(race_hour_temps_NEMIA_2019_a) + 
   geom_contour_fill(aes(day_of_yr, hour, z = temp_c, fill = temp_c_cut)) +
   # scale_fill_discretised() +
