@@ -33,10 +33,10 @@ get_state_names_from_fips <- function(){
                 destfile = here("data", "census_fips_states.xlsx"))
   }
   state_fips_names <- read_xlsx(here("data", "census_fips_states.xlsx"), skip = 5) %>%
-    rename(state_fips = "State (FIPS)") %>%
-    filter(state_fips %in% NEMIA_States) %>%
-    mutate(state_fips = as.numeric(state_fips)) %>%
-    select(Name, state_fips) %>%
+    rename(State_FIPS = "State (FIPS)") %>%
+    filter(State_FIPS %in% NEMIA_States) %>%
+    #mutate(State_FIPS = as.numeric(State_FIPS)) %>%
+    select(Name, State_FIPS) %>%
     mutate(Name = if_else(Name == "District of Columbia", "Washington D.C.", Name))
   return(state_fips_names)
 }
@@ -140,11 +140,11 @@ get_Census_tract_data <- function(){
   Tract_RaceEthn_Census <- bind_rows(Tract_RaceEthn_2000Census, Tract_RaceEthn_2010Census) %>%
     mutate(State_FIPS = str_sub(GEOID, 1, 2),
            County_FIPS = str_sub(GEOID, 1, 5),
-           BIPOC = Total_pop - White,
+           Other = Total_pop - (Asian + Black + White + Latino),
            ICE_black_seg = (White - Black) / Total_pop,
-           ICE_bipoc_seg = (White - BIPOC) / Total_pop,
+           ICE_bipoc_seg = (White - (Total_pop - White)) / Total_pop,
            ICE_latinx_seg = (White - Latino) / Total_pop)
-  
+  #BIPOC = Total_pop - White,
   return(Tract_RaceEthn_Census)
 
 }
@@ -199,12 +199,12 @@ create_weighted_race_hours_NEMIA <- function(year, urban = c("metropolitan", "no
   }  
   
   summarized_day_hour <- summarized_day_hour %>%
-    dplyr::select(year, month, hour, day_of_yr, w_temp, Black, White, Latino) %>% #change this for racial groups of interest
-    pivot_longer(cols = c("Black", "White", "Latino"), names_to = "race", values_to = "estimate") %>% #and this
+    dplyr::select(year, month, hour, day_of_yr, w_temp, Black, White, Latino, Asian) %>% #change this for racial groups of interest
+    pivot_longer(cols = c("Black", "White", "Latino", "Asian"), names_to = "race", values_to = "estimate") %>% #and this
     group_by(month, year, hour, day_of_yr, race) %>%
     summarise(monthhour_temp = matrixStats::weightedMedian(w_temp, estimate)) %>%
     mutate(temp_f = KtoF(monthhour_temp),
-           date = as.Date(paste0(year,"-",day_of_yr), "%Y-%j")) %>% #try to make the y axis prettier
+           date = as.Date(paste0(year,"-",day_of_yr), "%Y-%j")) %>% 
     select(-monthhour_temp) 
   
   return(summarized_day_hour)
@@ -259,138 +259,97 @@ make_contour_plot_by_race_and_development(race_hour_temps_NEMIA_metro, race_hour
 
 
 
-#### Visualize annual CDD density plots by race/ethnicity #### 
-plot_densities <- function(temperature_df, census_df, temp_measure, start_year, end_year){
+#### Visualize annual CDD density plots by race/ethnicity faceted by state #### 
+
+plot_state_temps_density <- function(df, plot_year, state_fips, temp_measure, xmin, xmax){
   
+  df1 <- df %>%
+    filter(year == plot_year & State_FIPS == state_fips) %>%
+    mutate(weight = estimate/sum(estimate))
+  
+  medians <- df1 %>%
+    group_by(race) %>%
+    summarise(median = matrixStats::weightedMedian(get(temp_measure), estimate))
+  
+  df2 <- df1 %>% 
+    left_join(., medians, by = "race")
+  
+  State_name <- df1$Name[1]
+  
+  plot <- ggplot() +
+    geom_density_ridges(data = df1, aes(x = cdd_summer, 
+                            y = race, 
+                            group = race,
+                            height=..density.., 
+                            weight=weight),    
+                        scale= 0.95,
+                        stat="density") +
+    xlim(xmin, xmax) +
+    geom_point(data = medians, aes(x = median, y = race), size = 2, shape = 23, color = "black", fill = "grey", position = position_nudge(y = 0.1)) +
+    theme_minimal() +
+    ggtitle(State_name) +
+    theme(text = element_text(size = 12), axis.title.x = element_blank(), axis.title.y = element_blank(), 
+          plot.title = element_text(hjust = 0.5)) 
+  
+  return(plot)
+}
+
+# plot_state_temps_density(temps_for_ggplot_density, 2010, "23", "cdd_summer", 0, 1100)
+
+plot_densities <- function(temperature_df, census_df, temp_measure, plot_year){
+
   temperature_df1 <- temperature_df %>%
     left_join(., census_df, by = c("census_year", "GEOID")) %>%
     filter(Total_pop>0)
   
   temps_for_ggplot_density <- temperature_df1 %>%
-    select(-census_year, -Total_pop, -ICE_black_seg, -ICE_bipoc_seg, -ICE_latinx_seg, -Latinx, -BIPOC) %>% #modify this as needed 
-    pivot_longer(cols = c("Black", "White"), names_to = "race", values_to = "estimate") #, "Latinx", "BIPOC"
+    select(-census_year, -Total_pop, -ICE_black_seg, -ICE_bipoc_seg, -ICE_latinx_seg, -BIPOC) %>% #modify this as needed 
+    pivot_longer(cols = c("Black", "White", "Latino", "Asian"), names_to = "race", values_to = "estimate") %>%
+     left_join(., get_state_names_from_fips(), by = "State_FIPS") 
   
-  plot_densities <- temps_for_ggplot_density %>%
-    filter(year >= start_year & year <= end_year) %>%
-    ggplot(.) +
-    geom_density(aes(x = get(temp_measure), fill = race, weights=estimate/sum(estimate)), alpha = .4) +
-    scale_fill_manual(values = c("#4053d3", "#ddb310")) + 
-    facet_grid(year~.) + 
-    xlab("Cooling Degree Days") +
-    theme_minimal() +
-    theme(text = element_text(size = 16)) +
-    xlim(c(0,950)) #10750
+  # first_column <- c("23", "33", "50", "25", "44")
+  # second_column <- c("09", "36", "34", "42", "54")
+  # third_column <- c("10", "24", "11", "51")
+  
+  # min_and_max_first_column <- temps_for_ggplot_density %>%
+  #   filter(str_detect(State_FIPS, third_column)) %>%
+  #   summarise(min_temp = min(get(temp_measure)),
+  #             max_temp = max(get(temp_measure)))
+
+  remove_x <- theme(axis.text.x = element_blank(),
+                    axis.ticks.x = element_blank(),
+                    axis.title.x = element_blank())
+  
+  first <- ((plot_state_temps_density(temps_for_ggplot_density, plot_year, 23, "cdd_summer", 0, 1150) + remove_x)/
+    (plot_state_temps_density(temps_for_ggplot_density, plot_year, 33, "cdd_summer", 0, 1150)+ remove_x)/
+    (plot_state_temps_density(temps_for_ggplot_density, plot_year, 50, "cdd_summer", 0, 1150)+ remove_x)/
+    (plot_state_temps_density(temps_for_ggplot_density, plot_year, 25, "cdd_summer", 0, 1150)+ remove_x)/
+    plot_state_temps_density(temps_for_ggplot_density, plot_year, 44, "cdd_summer", 0, 1150)) 
+    
+  second <- ((plot_state_temps_density(temps_for_ggplot_density, plot_year, "09", "cdd_summer", 95, 1900) + remove_x)/
+       (plot_state_temps_density(temps_for_ggplot_density, plot_year, 36, "cdd_summer", 95, 1900)+ remove_x)/
+       (plot_state_temps_density(temps_for_ggplot_density, plot_year, 34, "cdd_summer", 95, 1900)+ remove_x)/
+       (plot_state_temps_density(temps_for_ggplot_density, plot_year, 42, "cdd_summer", 95, 1900)+ remove_x)/
+       plot_state_temps_density(temps_for_ggplot_density, plot_year, 54, "cdd_summer", 95, 1900))
+  
+  #below trims ~8 rows of data on the lower end of the distribution for XGBoost model  
+  third <- ((plot_state_temps_density(temps_for_ggplot_density, plot_year, 10, "cdd_summer", 500, 2200) + remove_x)/
+                 (plot_state_temps_density(temps_for_ggplot_density, plot_year, 24, "cdd_summer", 500, 2200)+ remove_x)/
+                 (plot_state_temps_density(temps_for_ggplot_density, plot_year, 11, "cdd_summer", 500, 2200)+ remove_x)/
+                 (plot_state_temps_density(temps_for_ggplot_density, plot_year, 51, "cdd_summer", 500, 2200)) / 
+              plot_spacer() + theme(plot.margin = unit(c(15,0,0,0), "pt")))
+    
+    plot_densities <- first | second| third
   
   return(plot_densities)
 }
 
-medians_for_XGBoost <- Temperatures_XGBoost %>%
-  left_join(., Tract_RaceEthn_Census, by = c("census_year", "GEOID")) %>%
-  filter(Total_pop>0) %>%
-  select(-census_year, -Total_pop, -ICE_black_seg, -ICE_bipoc_seg, -ICE_latinx_seg, -Latinx, -BIPOC) %>% #modify this as needed 
-  pivot_longer(cols = c("Black", "White"), names_to = "race", values_to = "estimate") %>%
-  group_by(race, year) %>%
-  summarise_at(vars(mean_temp_summer:noaa_cdd),  ~matrixStats::weightedMedian(., estimate)) 
-
-medians_for_NLDAS <- Temperatures_NLDAS %>%
-  left_join(., Tract_RaceEthn_Census, by = c("census_year", "GEOID")) %>%
-  filter(Total_pop>0) %>%
-  select(-census_year, -Total_pop, -ICE_black_seg, -ICE_bipoc_seg, -ICE_latinx_seg, -Latinx, -BIPOC) %>% #modify this as needed 
-  pivot_longer(cols = c("Black", "White"), names_to = "race", values_to = "estimate") %>%
-  group_by(race, year) %>%
-  summarise_at(vars(mean_temp_summer:noaa_cdd),  ~matrixStats::weightedMedian(., estimate, na.rm = T)) 
+plot_densities(Temperatures_XGBoost_summer_avgs, Tract_RaceEthn_Census, "cdd_summer", 2010)
+plot_densities(Temperatures_NLDAS_summer_avgs, Tract_RaceEthn_Census, "cdd_summer", 2010)
 
 
-
-dens_xgboost <- plot_densities(Temperatures_XGBoost, Tract_RaceEthn_Census, "cdd_summer", 2003, 2003)
-dens_nldas <- plot_densities(Temperatures_NLDAS, Tract_RaceEthn_Census, "cdd_summer", 2003, 2003)
-
-(dens_xgboost / dens_nldas) + plot_layout(ncol = 1)
-
-plot_avg_annaul_temp <- function(temperature_df, census_df, EIA_regions, 
-                                 temp_measure= c("cdd_summer", "mean_temp_summer", "mean_htindx_summer", "nighttime.cdh_summer", "noaa_cdd"), 
-                                 FUN,
-                                 region = c("Middle Atlantic", "South Atlantic", "New England")){
-  
-  # temperature_df <- Temperatures_NLDAS
-  # census_df <- Tract_RaceEthn_Census
-  # FUN <- matrixStats::weightedMedian
-  # temp_measure <- "cdd_summer"
-  
-  temperature_df1 <- temperature_df %>%
-    left_join(., census_df, by = c("census_year", "GEOID")) %>%
-    left_join(., EIA_regions, by = "State_FIPS") %>%
-    filter(Total_pop>0)
-  
-  median_annual_cdd_summer <- temperature_df1 %>%
-    select(-census_year, -Total_pop, -ICE_black_seg, -ICE_bipoc_seg, -ICE_latinx_seg, -Latinx, -BIPOC) %>%
-    pivot_longer(cols = c("Black", "White"), names_to = "race", values_to = "estimate") #, "Latinx", "BIPOC"
-  
-  median_annual_cdd_summer1 <- median_annual_cdd_summer %>%
-    group_by(race, year) %>% #, Climate_Region
-    summarise(avg_temp = FUN(x = get(temp_measure), w = estimate, na.rm = T)) %>% #what are the NAs here???
-    ungroup() 
-  # %>%
-  #   filter(Climate_Region==region)
-  
-  table <- median_annual_cdd_summer1 %>%
-    group_by(year) %>% #, Climate_Region
-    pivot_wider(names_from = race, values_from = avg_temp) %>%
-    mutate_at(vars(Black), ~round((((.-White)/White)*100),1)+100) %>% #vars(Black, Latinx, BIPOC)
-    #filter(Climate_Region==region) %>%
-    ungroup() %>%
-    select(-White) %>% #, -Climate_Region
-    pivot_longer(-year) 
-  
-  plot1 <- ggplot() +
-    geom_point(data = median_annual_cdd_summer1, aes(x = year, y = avg_temp, color = race), shape = "-", size = 15) +
-    geom_line(data = median_annual_cdd_summer1, aes(x = year, y = avg_temp, color = race)) + 
-    scale_x_continuous(n.breaks = 17) +
-    #ylab(as.expression(temp_measure)) + 
-    scale_color_manual(values = c("#4053d3", "#FF5733")) + 
-    ylab("Nighttime Cooling Degree\nHours (median)") +
-    #ylab("Cooling degree days (median)") +
-    ylim(c(3000, 9000)) +#c(300, 850)
-    theme_minimal() + 
-    theme(text = element_text(size = 16), panel.grid.minor.x = element_blank(), axis.title.x = element_blank())
-  
-  table_plot <- ggplot(data = table, aes(x = year, y = factor(name, levels = c("Black")))) + #levels = c("Black", "BIPOC", "Latinx")
-    geom_tile(fill = "white", alpha = .4, color = "black") +
-    geom_text(aes(label = paste0(value, "%"))) +
-    scale_x_discrete(expand = expansion(mult = c(0, 0))) +
-    labs(y = "", x = NULL) +
-    theme_minimal() +
-    theme(axis.line = element_blank(), axis.ticks = element_blank(), axis.text.x = element_blank(),
-          panel.grid = element_blank(), strip.text = element_blank(), panel.spacing.x = unit(0, "mm"))
-  
-  combined_plot <- (plot1 / table_plot) +  plot_layout(ncol = 1, heights = c(8, 1))
-  
-  return(combined_plot)
-  
-}
-
-midAtl_cdd_NLDAS <- plot_avg_annaul_temp(Temperatures_NLDAS, Tract_RaceEthn_Census, EIA_regions, "cdd_summer", matrixStats::weightedMedian,
-                     "Middle Atlantic")
-midAtl_cdd_XGBoost <- plot_avg_annaul_temp(Temperatures_XGBoost, Tract_RaceEthn_Census, EIA_regions, "cdd_summer", matrixStats::weightedMedian,
-                     "Middle Atlantic")
-
-midAtl_cdd_NLDAS / midAtl_cdd_XGBoost + plot_layout(nrow = 4)
-
-midAtl_cdh_NLDAS <- plot_avg_annaul_temp(Temperatures_NLDAS, Tract_RaceEthn_Census, EIA_regions, "nighttime.cdh_summer", matrixStats::weightedMedian,
-                     "Middle Atlantic")
-midAtl_cdh_XGBoost <- plot_avg_annaul_temp(Temperatures_XGBoost, Tract_RaceEthn_Census, EIA_regions, "nighttime.cdh_summer", matrixStats::weightedMedian,
-                     "Middle Atlantic")
-
-midAtl_cdh_NLDAS / midAtl_cdh_XGBoost + plot_layout(nrow=4)
-
-plot_avg_annaul_temp(Temperatures_NLDAS, Tract_RaceEthn_Census, EIA_regions, "nighttime.cdh_summer", matrixStats::weightedMedian,
-                     "New England")
-plot_avg_annaul_temp(Temperatures_XGBoost, Tract_RaceEthn_Census, EIA_regions, "nighttime.cdh_summer", matrixStats::weightedMedian,
-                     "New England")
 
 #### Calculate mean differences by year, paired by county ####
-
-##leftoff here on 2022-01-17
 
 run_lmer_tempdisparity <- function(df_county_temp_and_race, temp_measure = c("cdd_summer", "nighttime.cdh_summer")){
   
@@ -419,13 +378,17 @@ run_lmer_tempdisparity <- function(df_county_temp_and_race, temp_measure = c("cd
 
 Calculate_mean_diffs_by_race <- function(temp_model, census_data, temp_measure = c("cdd_summer", "nighttime.cdh_summer")){
   
-  Temperature_w_Censusdata <- Temperatures_XGBoost_summer_avgs %>%
-    left_join(., Tract_RaceEthn_Census, by = c("GEOID", "census_year")) %>% 
+  temp_model <- Temperatures_XGBoost_summer_avgs
+  census_data <- Tract_RaceEthn_Census
+  temp_measure = "cdd_summer"
+  
+  Temperature_w_Censusdata <- temp_model %>%
+    left_join(., census_data, by = c("GEOID", "census_year")) %>% 
     select(-starts_with("ICE")) %>%
-    pivot_longer(cols = c("Black", "White", "Latino", "BIPOC"), names_to = "race", values_to = "estimate") %>%
+    pivot_longer(cols = c("Black", "White", "Latino", "Asian"), names_to = "race", values_to = "estimate") %>%
     group_by(County_FIPS, race, year) %>%
     summarise_at(vars(mean_htindx_summer:nighttime.cdh_summer), ~ weighted.mean(., estimate)) %>%
-    mutate(race = factor(race, levels = c("White", "Black", "Latino", "BIPOC")),
+    mutate(race = factor(race, levels = c("White", "Black", "Latino", "Asian")),
       state = str_sub(County_FIPS, 1, 2))
   
   lmer_formula <- as.formula(paste(temp_measure, "~ race + County_FIPS + (1|year)"))
