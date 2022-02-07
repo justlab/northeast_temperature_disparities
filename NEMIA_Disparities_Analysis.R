@@ -3,8 +3,7 @@ library(tidycensus)
 library(here)
 library(fst)
 library(sf)
-#install.packages("lme4")
-library(lme4)
+# library(lme4)
 library(lubridate)
 library(ggridges)
 library(patchwork)
@@ -15,7 +14,9 @@ library(Hmisc)
 library(DescTools)
 library(metR)
 library(readxl)
-library(tmap)
+library(wec)
+library(fixest)
+
 
 #### Pull in data ####
 # Temperatures <- read_rds(here("/data-coco/NEMIA_temperature/cdh/cdh_tractsSF_2019_06-08.rds")) #to erase
@@ -105,11 +106,13 @@ clean_and_summarize_temperatures <- function(temperature_df){ #rename this to re
 Temperatures_XGBoost_summer_avgs <- clean_and_summarize_temperatures(Temperatures_XGBoost)
 Temperatures_NLDAS_summer_avgs <- clean_and_summarize_temperatures(Temperatures_NLDAS)
 
-find_vars_2000dec <- load_variables(2000, "sf1")
-find_vars_2010dec <- load_variables(2010, "sf1")
+# find_vars_2000dec <- load_variables(2000, "sf1")
+# find_vars_2010dec <- load_variables(2010, "sf1")
 
 
 get_Census_tract_data <- function(){
+  
+  metro = c(1.0, 1.1, 2.0, 2.1, 3.0, 4.1, 5.1, 7.1, 8.1, 10.1)
   
   Tract_RaceEthn_2000Census <- get_decennial(geography = "tract",
                                              variables = c("Black" = "P004006",
@@ -122,7 +125,8 @@ get_Census_tract_data <- function(){
                                              output = "wide",
                                              state = NEMIA_States) %>%
     mutate(census_year = 2000) %>%
-    left_join(., get_RUCAs_2000(), by = c("GEOID", "census_year"))
+    left_join(., get_RUCAs_2000(), by = c("GEOID", "census_year")) %>%
+    mutate(urban = if_else(RUCA_code2 %in% metro, "metropolitan", "not_metropolitan"))
   
   Tract_RaceEthn_2010Census <- get_decennial(geography = "tract",
                                              variables = c("Black" = "P005004",
@@ -135,7 +139,8 @@ get_Census_tract_data <- function(){
                                              output = "wide",
                                              state = NEMIA_States) %>%
     mutate(census_year = 2010) %>%
-    left_join(., get_RUCAs_2010(), by = c("GEOID", "census_year"))
+    left_join(., get_RUCAs_2010(), by = c("GEOID", "census_year")) %>%
+    mutate(urban = if_else(RUCA_code2 %in% metro, "metropolitan", "not_metropolitan"))
   
   Tract_RaceEthn_Census <- bind_rows(Tract_RaceEthn_2000Census, Tract_RaceEthn_2010Census) %>%
     mutate(State_FIPS = str_sub(GEOID, 1, 2),
@@ -170,8 +175,6 @@ tract_2010_shp %>%
 all_pred_filepaths <- list.files(here("data", "hourly_tract_preds"), full.names = T)
 create_weighted_race_hours_NEMIA <- function(year, urban = c("metropolitan", "not_metropolitan", "all")){
   
-  metro = c(1.0, 1.1, 2.0, 2.1, 3.0, 4.1, 5.1, 7.1, 8.1, 10.1)
-  
   year_i_pred_paths <- enframe(all_pred_filepaths) %>% filter(str_detect(value, year))
   
   year_i_preds <- year_i_pred_paths$value %>%
@@ -185,17 +188,17 @@ create_weighted_race_hours_NEMIA <- function(year, urban = c("metropolitan", "no
            day = day(ground.time.nominal),
            hour = hour(ground.time.nominal),
            day_of_yr = yday(ground.time.nominal)) %>%
-    filter(month>=5 & month<=9) %>%
-    left_join(Tract_RaceEthn_Census, by = c("census_year", "GEOID")) 
+    left_join(Tract_RaceEthn_Census, by = c("census_year", "GEOID")) %>%
+    filter(month>=5 & month<=9 & Total_pop>0) 
   
   if(urban=="metropolitan"){
     summarized_day_hour <- summarized_day_hour %>%
-      filter(RUCA_code2 %in% metro)
+      filter(urban == "metropolitan")
   }
   
   if(urban=="not_metropolitan"){
     summarized_day_hour <- summarized_day_hour %>%
-      filter(!RUCA_code2 %in% metro)
+      filter(urban != "metropolitan")
   }  
   
   summarized_day_hour <- summarized_day_hour %>%
@@ -303,7 +306,7 @@ plot_densities <- function(temperature_df, census_df, temp_measure, plot_year){
     filter(Total_pop>0)
   
   temps_for_ggplot_density <- temperature_df1 %>%
-    select(-census_year, -Total_pop, -ICE_black_seg, -ICE_bipoc_seg, -ICE_latinx_seg, -BIPOC) %>% #modify this as needed 
+    select(-census_year, -Total_pop, -ICE_black_seg, -ICE_bipoc_seg, -ICE_latinx_seg, -Other) %>% #modify this as needed 
     pivot_longer(cols = c("Black", "White", "Latino", "Asian"), names_to = "race", values_to = "estimate") %>%
      left_join(., get_state_names_from_fips(), by = "State_FIPS") 
   
@@ -339,7 +342,12 @@ plot_densities <- function(temperature_df, census_df, temp_measure, plot_year){
                  (plot_state_temps_density(temps_for_ggplot_density, plot_year, 51, "cdd_summer", 500, 2200)) / 
               plot_spacer() + theme(plot.margin = unit(c(15,0,0,0), "pt")))
     
-    plot_densities <- first | second| third
+    plot_densities <- (first | second| third) + plot_annotation(
+      caption = "Cooling degree days (F)",
+      theme = theme(
+        plot.caption = element_text(size = 12, hjust = 0.5, face = "bold")
+      )
+    )
   
   return(plot_densities)
 }
@@ -350,61 +358,84 @@ plot_densities(Temperatures_NLDAS_summer_avgs, Tract_RaceEthn_Census, "cdd_summe
 
 
 #### Calculate mean differences by year, paired by county ####
+wec_for_collapsed_data <- function (df, omitted) {
+  
+  frequencies <- as.table(c(
+    Other = sum(df$estimate[df$race=="Other"]),
+    Black = sum(df$estimate[df$race=="Black"]),
+    Latino = sum(df$estimate[df$race=="Latino"]),
+    Asian = sum(df$estimate[df$race=="Asian"]),
+    White = sum(df$estimate[df$race=="White"])))
+  
+  n.cat <- length(table(df$race))
+  omitted <- which(levels(df$race) == omitted)
+  new.contrasts <- contr.treatment(n.cat, base = omitted)
+  new.contrasts[omitted, ] <- -1 * frequencies[-omitted]/frequencies[omitted]
+  colnames(new.contrasts) <- names(frequencies[-omitted])
+  
+  return(new.contrasts)
+}
 
 run_lmer_tempdisparity <- function(df_county_temp_and_race, temp_measure = c("cdd_summer", "nighttime.cdh_summer")){
   
   state_fips1 <- str_sub(df_county_temp_and_race$County_FIPS[1], 1, 2)
+  contrasts(df_county_temp_and_race$race) <- wec_for_collapsed_data(df_county_temp_and_race, "Other")
   
   if(state_fips1==11){ #Washington DC only has one county -- so fixed effect for county is removed 
     
-        lmer_formula <- as.formula(paste(temp_measure, "~ race + (1|year)"))
+    feols_formula <- as.formula(paste(temp_measure, "~ race|year"))
     
     }else{
       
-        lmer_formula <- as.formula(paste(temp_measure, "~ race + County_FIPS + (1|year)"))
+      feols_formula <- as.formula(paste(temp_measure, "~ race|County_FIPS + year"))
     }
   
-  lmer_output <- lmer(lmer_formula, data = df_county_temp_and_race) 
   
-  confint_lmer <- as_tibble(confint(lmer_output, c("raceBlack", "raceLatino", "raceBIPOC"), level = 0.95)) %>% 
-    rename(lower_ci = "2.5 %",
-           upper_ci = "97.5 %")
+  feols_temp_results1 <- feols(feols_formula, data = df_county_temp_and_race, weights = df_county_temp_and_race$estimate, ~GEOID)
   
-  results <- enframe(fixef(lmer_output)) %>% 
-    filter(str_detect(name, "race")) %>% bind_cols(., confint_lmer) %>% mutate(state_fips = as.numeric(state_fips1))
+  results <- enframe(coef(feols_temp_results1)) %>%
+    bind_cols(., as_tibble(confint(feols_temp_results1, 
+                                   se = "cluster", 
+                                   parm = c("raceBlack", "raceLatino", "raceAsian", "raceWhite"), 
+                                   level = 0.95)) %>%
+                rename(lower_ci = "2.5 %",
+                       upper_ci = "97.5 %")) %>%
+    mutate(State_FIPS = state_fips1)
   
   return(results)
 }
 
+Temperature_w_Censusdata %>%
+  filter(State_FIPS=="11") %>%
+  run_lmer_tempdisparity(df_county_temp_and_race = ., temp_measure = "cdd_summer")
+
+
 Calculate_mean_diffs_by_race <- function(temp_model, census_data, temp_measure = c("cdd_summer", "nighttime.cdh_summer")){
   
-  temp_model <- Temperatures_XGBoost_summer_avgs
-  census_data <- Tract_RaceEthn_Census
-  temp_measure = "cdd_summer"
-  
-  Temperature_w_Censusdata <- temp_model %>%
+  Temperature_w_Censusdata <- temp_model %>% 
     left_join(., census_data, by = c("GEOID", "census_year")) %>% 
-    select(-starts_with("ICE")) %>%
-    pivot_longer(cols = c("Black", "White", "Latino", "Asian"), names_to = "race", values_to = "estimate") %>%
-    group_by(County_FIPS, race, year) %>%
-    summarise_at(vars(mean_htindx_summer:nighttime.cdh_summer), ~ weighted.mean(., estimate)) %>%
-    mutate(race = factor(race, levels = c("White", "Black", "Latino", "Asian")),
-      state = str_sub(County_FIPS, 1, 2))
-  
-  lmer_formula <- as.formula(paste(temp_measure, "~ race + County_FIPS + (1|year)"))
-  
-  lmer_temp_results <- lmer(lmer_formula, data = Temperature_w_Censusdata)
-  
-  confint_lmer <- as_tibble(confint(lmer_temp_results, c("raceBlack", "raceLatino", "raceBIPOC"), level = 0.95)) %>% 
-    rename(lower_ci = "2.5 %",
-           upper_ci = "97.5 %")
-  
-  results <- enframe(fixef(lmer_temp_results)) %>% 
-    filter(str_detect(name, "race")) %>% bind_cols(., confint_lmer) %>% mutate(state_fips = 00)
+    pivot_longer(cols = c("Black", "White", "Latino", "Asian", "Other"), names_to = "race", values_to = "estimate") %>%
+    mutate(race = factor(race, levels = c("Other", "Asian", "Black", "Latino", "White"))) %>% 
+    select(State_FIPS, year, County_FIPS, temp_measure, race, estimate, GEOID) %>% #Black, White, Asian, Latino, Other, GEOID, urban, State_FIPS
+    filter(estimate!=0) 
   
   states <- Temperature_w_Censusdata %>%
-    split(.$state) %>%
+    split(.$State_FIPS) %>%
     map_dfr(., ~run_lmer_tempdisparity(.x, temp_measure), .progress = T)
+  
+  contrasts(Temperature_w_Censusdata$race) <- wec_for_collapsed_data(Temperature_w_Censusdata, "Other")
+  feols_formula <- as.formula(paste(temp_measure, "~ race|County_FIPS + year"))
+  feols_temp_results1 <- feols(feols_formula, data = Temperature_w_Censusdata, weights = Temperature_w_Censusdata$estimate, ~GEOID)
+  
+  results <- enframe(coef(feols_temp_results1)) %>%
+    bind_cols(., as_tibble(confint(feols_temp_results1, 
+                                   se = "cluster", 
+                                   parm = c("raceBlack", "raceLatino", "raceAsian", "raceWhite"), 
+                                   level = 0.95)) %>%
+                rename(lower_ci = "2.5 %",
+                       upper_ci = "97.5 %")) %>%
+    mutate(State_FIPS = as.character(00))
+  
   
   results1 <- bind_rows(results, states)
   
@@ -412,9 +443,70 @@ Calculate_mean_diffs_by_race <- function(temp_model, census_data, temp_measure =
   
 }
 
-lmer_results_race_meandiffs <- Calculate_mean_diffs_by_race(Temperatures_XGBoost_summer_avgs, Tract_RaceEthn_Census, "cdd_summer")
+feols_results_race_meandiffs <- Calculate_mean_diffs_by_race(Temperatures_XGBoost_summer_avgs, Tract_RaceEthn_Census, "cdd_summer")
 
-#next
+
+plot_state_temps_mean_diffs <- function(df, state_fips, xmin, xmax){
+
+  df1 <- df %>%
+    filter(State_FIPS == state_fips) %>%
+    left_join(., get_state_names_from_fips(), by = "State_FIPS")
+  
+  State_name <- df1$Name[1]
+  
+  plot <- df1 %>%
+    mutate(race = factor(name, levels = c("raceWhite", "raceLatino", "raceBlack", "raceAsian"), 
+                         labels = c("White", "Latino", "Black", "Asian"))) %>%
+    ggplot() +
+    geom_hline(yintercept = 0, colour = gray(1/2), lty = 2) +
+    geom_pointrange(aes(x = race, y = value, ymax = upper_ci, ymin = lower_ci)) +
+    coord_flip(ylim = c(xmin, xmax)) +
+    theme_minimal() +
+    ggtitle(State_name) +
+    theme(text = element_text(size = 12), axis.title.x = element_blank(), axis.title.y = element_blank(), 
+          plot.title = element_text(hjust = 0.5)) 
+  
+  return(plot)
+}
+
+plot_temp_mean_diffs <- function(df_from_feols, xmin, xmax){
+ 
+  # df_from_feols <- feols_results_race_meandiffs
+  # xmin = -20
+  # xmax = 60
+  
+  first <- plot_state_temps_mean_diffs(df_from_feols, "23", xmin, xmax)/
+    plot_state_temps_mean_diffs(df_from_feols, "33", xmin, xmax)/
+    plot_state_temps_mean_diffs(df_from_feols, "50", xmin, xmax)/
+    plot_state_temps_mean_diffs(df_from_feols, "25", xmin, xmax)/
+    plot_state_temps_mean_diffs(df_from_feols, "44", xmin, xmax)
+  
+  second <- plot_state_temps_mean_diffs(df_from_feols, "09", xmin, xmax)/
+    plot_state_temps_mean_diffs(df_from_feols, "36", xmin, xmax)/
+    plot_state_temps_mean_diffs(df_from_feols, "34", xmin, xmax)/
+    plot_state_temps_mean_diffs(df_from_feols, "42", xmin, xmax)/
+    plot_state_temps_mean_diffs(df_from_feols, "54", xmin, xmax)
+  
+  third <- plot_state_temps_mean_diffs(df_from_feols, "10", xmin, xmax)/
+    plot_state_temps_mean_diffs(df_from_feols, "24", xmin, xmax)/
+    plot_state_temps_mean_diffs(df_from_feols, "11", xmin, xmax)/
+    plot_state_temps_mean_diffs(df_from_feols, "51", xmin, xmax)/
+    (plot_spacer() + theme(plot.margin = unit(c(25,0,0,0), "pt")))
+    
+  plot <- (first | second | third) + 
+    plot_annotation(
+      caption = "Difference from county mean (F°)",
+      theme = theme(
+        plot.caption = element_text(size = 12, face = "bold", hjust = 0.5)
+      )
+    )
+  
+  return(plot)
+}
+
+plot_temp_mean_diffs(feols_results_race_meandiffs, -20, 60)
+
+#left off here 2022-02-06
 
 County_CDDs_2012 <- Temperatures_XGBoost_summer_avgs %>%
   filter(year==2012) %>%
