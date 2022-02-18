@@ -9,13 +9,16 @@ library(ggridges)
 library(patchwork)
 library(furrr)
 library(broom)
-library(ggforce)
-library(Hmisc)
+#library(ggforce)
+#library(Hmisc)
 library(DescTools)
 library(metR)
 library(readxl)
 library(wec)
 library(fixest)
+library(mgcv)
+library(elevatr)
+library(DHARMa)
 
 
 #### Pull in data ####
@@ -57,7 +60,7 @@ get_RUCAs_2000 <- function(){
     rename("GEOID" = "State County Tract Code",
            "RUCA_code1" = "RUCA Primary Code 2000",
            "RUCA_code2" = "RUCA Secondary Code 2000") %>%
-    select(GEOID, RUCA_code1, RUCA_code2) %>%
+    dplyr::select(GEOID, RUCA_code1, RUCA_code2) %>%
     mutate(census_year = 2000)
   
   return(ruca_2000)
@@ -75,7 +78,7 @@ get_RUCAs_2010 <- function(){
     rename("GEOID" = "State-County-Tract FIPS Code (lookup by address at http://www.ffiec.gov/Geocode/)",
            "RUCA_code1" = "Primary RUCA Code 2010",
            "RUCA_code2" = "Secondary RUCA Code, 2010 (see errata)") %>%
-    select(GEOID, RUCA_code1, RUCA_code2) %>%
+    dplyr::select(GEOID, RUCA_code1, RUCA_code2) %>%
     mutate(census_year = 2010)
   
   return(ruca_2010)
@@ -148,7 +151,8 @@ get_Census_tract_data <- function(){
            Other = Total_pop - (Asian + Black + White + Latino),
            ICE_black_seg = (White - Black) / Total_pop,
            ICE_bipoc_seg = (White - (Total_pop - White)) / Total_pop,
-           ICE_latinx_seg = (White - Latino) / Total_pop)
+           ICE_latinx_seg = (White - Latino) / Total_pop,
+           ICE_asian_seg = (White - Asian)/ Total_pop)
   #BIPOC = Total_pop - White,
   return(Tract_RaceEthn_Census)
 
@@ -157,18 +161,54 @@ get_Census_tract_data <- function(){
 Tract_RaceEthn_Census <- get_Census_tract_data() 
 
 #grab a map to visualize 
+sfc_as_cols <- function(x, geometry, names = c("x","y")) {
+  if (missing(geometry)) {
+    geometry <- sf::st_geometry(x)
+  } else {
+    geometry <- rlang::eval_tidy(enquo(geometry), x)
+  }
+  stopifnot(inherits(x,"sf") && inherits(geometry,"sfc_POINT"))
+  ret <- sf::st_coordinates(geometry)
+  ret <- tibble::as_tibble(ret)
+  stopifnot(length(names) == ncol(ret))
+  x <- x[ , !names(x) %in% names]
+  ret <- setNames(ret,names)
+  dplyr::bind_cols(x,ret)
+}
+
+##Functionalize this to get xy coords 
+tract_2000_shp <- get_decennial(geography = "tract",
+                                variables = c("Total_pop" = "P001001"),
+                                year = 2000,
+                                output = "wide",
+                                geometry = T, 
+                                state = NEMIA_States) %>%
+  mutate(census_year = 2000) %>%
+  filter(!st_is_empty(.))
+
 tract_2010_shp <- get_decennial(geography = "tract",
-              variables = c("Total_pop" = "P004001"),
+              variables = c("Total_pop" = "P001001"),
               year = 2010,
-              survey = "sf1",
               output = "wide",
               geometry = T, 
-              state = NEMIA_States)
+              state = NEMIA_States) %>%
+  mutate(census_year = 2010) %>%
+  filter(!st_is_empty(.)) 
 
-tract_2010_shp %>% 
-  inner_join(., Tract_RaceEthn_Census %>% filter(census_year == 2010 & !RUCA_code2 %in% metropolitan), by = "GEOID") %>%
-  ggplot() + 
-  geom_sf()
+tract_centroids <- bind_rows(tract_2000_shp, tract_2010_shp) %>%
+  st_centroid() 
+
+#can potentially remove elevation 
+tract_elevations <- get_elev_point(tract_centroids$geometry, prj = 4326, src = "epqs")
+
+tract_centroids1 <- bind_cols(tract_centroids, tract_elevations %>% st_drop_geometry(.) %>% dplyr::select(elevation))
+
+# %>%
+#   sfc_as_cols() %>%
+#   st_drop_geometry() %>%
+#   select(GEOID, x, y, census_year)
+##
+
 
 #### Contour plots ####
 
@@ -376,7 +416,7 @@ wec_for_collapsed_data <- function (df, omitted) {
   return(new.contrasts)
 }
 
-run_lmer_tempdisparity <- function(df_county_temp_and_race, temp_measure = c("cdd_summer", "nighttime.cdh_summer")){
+run_lmer_tempdisparity <- function(df_county_temp_and_race, temp_measure = c("cdd_summer", "nighttime.cdh_summer")){ #should rename since now feols
   
   state_fips1 <- str_sub(df_county_temp_and_race$County_FIPS[1], 1, 2)
   contrasts(df_county_temp_and_race$race) <- wec_for_collapsed_data(df_county_temp_and_race, "Other")
@@ -412,20 +452,104 @@ Temperature_w_Censusdata %>%
 
 Calculate_mean_diffs_by_race <- function(temp_model, census_data, temp_measure = c("cdd_summer", "nighttime.cdh_summer")){
   
+  temp_measure <- "cdd_summer"
+  temp_model <- Temperatures_XGBoost_summer_avgs
+  census_data <- Tract_RaceEthn_Census
+  
   Temperature_w_Censusdata <- temp_model %>% 
     left_join(., census_data, by = c("GEOID", "census_year")) %>% 
     pivot_longer(cols = c("Black", "White", "Latino", "Asian", "Other"), names_to = "race", values_to = "estimate") %>%
     mutate(race = factor(race, levels = c("Other", "Asian", "Black", "Latino", "White"))) %>% 
-    select(State_FIPS, year, County_FIPS, temp_measure, race, estimate, GEOID) %>% #Black, White, Asian, Latino, Other, GEOID, urban, State_FIPS
+    dplyr::select(State_FIPS, year, County_FIPS, temp_measure, race, estimate, GEOID, RUCA_code2, census_year, urban, RUCA_code1) %>% #Black, White, Asian, Latino, Other, GEOID, urban, State_FIPS
     filter(estimate!=0) 
+  
+  # Temperature_w_Censusdata <- Temperatures_NLDAS_summer_avgs %>% 
+  #   left_join(., census_data, by = c("GEOID", "census_year")) %>% 
+  #   pivot_longer(cols = c("Black", "White", "Latino", "Asian", "Other"), names_to = "race", values_to = "estimate") %>%
+  #   mutate(race = factor(race, levels = c("Other", "Asian", "Black", "Latino", "White"))) %>% 
+  #   dplyr::select(State_FIPS, year, County_FIPS, temp_measure, race, estimate, GEOID, RUCA_code2, census_year, urban, RUCA_code1) %>% #Black, White, Asian, Latino, Other, GEOID, urban, State_FIPS
+  #   filter(estimate!=0) 
+
+  #try to do this to run bam for the mean diffs   
+  dat1 <- Temperature_w_Censusdata %>%
+    left_join(., tract_centroids1, by = c("GEOID", "census_year"))
+  dat2 <- dat1 %>% st_as_sf(.$geometry) %>% sfc_as_cols(geometry) %>% st_drop_geometry() %>%
+    mutate(County_year = paste0(County_FIPS, "_", year))
   
   states <- Temperature_w_Censusdata %>%
     split(.$State_FIPS) %>%
     map_dfr(., ~run_lmer_tempdisparity(.x, temp_measure), .progress = T)
   
   contrasts(Temperature_w_Censusdata$race) <- wec_for_collapsed_data(Temperature_w_Censusdata, "Other")
-  feols_formula <- as.formula(paste(temp_measure, "~ race|County_FIPS + year"))
+  feols_formula <- as.formula(paste(temp_measure, "~ race + splines::ns(elevation, df = 4)|factor(County_FIPS) + factor(year) + 
+                                    factor(RUCA_code2)")) #log((elevation+100))
   feols_temp_results1 <- feols(feols_formula, data = Temperature_w_Censusdata, weights = Temperature_w_Censusdata$estimate, ~GEOID)
+  feols_temp_results1 <- feols(feols_formula, data = dat2, weights = dat2$estimate, ~GEOID)
+  qqnorm(scale(residuals(feols_temp_results1)));qqline(scale(residuals(feols_temp_results1)))
+  
+  dat2_2000 <- dat2 %>% filter(census_year==2000)
+  feols_temp_results2000 <- feols(feols_formula, data = dat2_2000, weights = dat2_2000$estimate, ~GEOID)
+  qqnorm(residuals(feols_temp_results2000));qqline(residuals(feols_temp_results2000))
+  
+  dat2_2010 <- dat2 %>% filter(census_year==2010)
+  feols_temp_results2010 <- feols(feols_formula, data = dat2_2010, weights = dat2_2010$estimate, ~GEOID)
+  qqnorm(residuals(feols_temp_results2010));qqline(residuals(feols_temp_results2010))
+  
+  library(MASS)
+  
+  rlm_temp_results <- rlm(cdd_summer ~ race + splines::ns(elevation, df = 4) + factor(County_FIPS) + factor(year) + factor(RUCA_code2), data = dat2, 
+      weights = dat2$estimate)
+  
+
+  gam_mean_temp_diff <- bam(round(cdd_summer,0) ~ race + factor(County_FIPS) + factor(year), family = quasipoisson(), weights = estimate,
+                            data = Temperature_w_Censusdata, discrete = T, nthreads = 2)
+  start <- proc.time()
+  
+  # gam_mean_temp_diff1 <- bam(cdd_summer ~ race + factor(County_FIPS) + #factor(year)
+  #                               + factor(RUCA_code2) + te(x, y, year, d = c(2,1), bs = c("gp", "fs")), 
+  #                           family = scat(), weights = estimate,
+  #                           data = dat2, discrete = T, nthreads = 2)
+  
+  gam_mean_temp_diff1 <- bam(cdd_summer ~ race + factor(County_FIPS) + #factor(year)
+                                factor(RUCA_code2) + te(x, y, d = 2, bs = "gp", by = factor(year)), #try ts and cr isntead 
+                             family = scat(), weights = estimate,
+                             data = dat2, discrete = T, nthreads = 2) 
+  
+  qqnorm(residuals(gam_mean_temp_diff1));qqline(residuals(gam_mean_temp_diff1))
+  plot(residuals(gam_mean_temp_diff1))
+proc.time() - start
+
+ols_mean_temp_diff<- lm(cdd_summer ~ race + splines::ns(elevation, df = 4) + factor(County_FIPS) + factor(year) + factor(RUCA_code2), data = dat2, 
+   weights = dat2$estimate)
+treg_mean_temp_diff <- treg(ols_mean_temp_diff, r = 4.5)
+# treg_mean_temp_diff1 <- treg(ols_mean_temp_diff, r = 2.5)
+# treg_mean_temp_diff2 <- treg(ols_mean_temp_diff, r = 3)
+qqnorm(residuals(treg_mean_temp_diff));qqline(residuals(treg_mean_temp_diff))
+dat3_resids <- bind_cols(dat2, tibble(resid = scale(residuals(feols_temp_results1)))) %>%
+  st_as_sf(.$geometry)
+
+dat3_resids %>% ggplot() + geom_sf()
+
+big_resids <- dat3_resids %>% mutate(big_resid = if_else(resid > 3, "positive",
+                                           if_else(resid < -3, "negative", "between"))) %>%
+  filter(big_resid != "between")
+
+library(heavy)  
+?heavyLm.fit
+ny_uncount <- Temperature_w_Censusdata %>%
+  filter(State_FIPS=="36") %>%
+  dplyr::select(year, County_FIPS, cdd_summer, race, RUCA_code2, estimate) %>%
+  uncount(estimate)
+
+heavylm_mean_temp_diff  <- heavyLm(cdd_summer ~ race + factor(County_FIPS) + factor(year) + 
+          factor(RUCA_code2), data = ny_uncount)
+
+  ggplot() + geom_sf(data = ) geom_sf(data = big_resids, aes(color = big_resid)) + facet_wrap(.~year)
+  #sigma <- feols_temp_results1$sigma2
+  #plot(feols_temp_results1$residuals/(sigma*sqrt(1-(hat(model.matrix(feols_temp_results1)))))) #studentized residuals
+  hist(residuals(feols_temp_results1), density=20, breaks=1000, probability = T)
+  curve(dnorm(x, mean=mean(residuals(feols_temp_results1)), sd=sd(residuals(feols_temp_results1))),
+        col="darkblue", lwd=2, add=TRUE, yaxt="n")
   
   results <- enframe(coef(feols_temp_results1)) %>%
     bind_cols(., as_tibble(confint(feols_temp_results1, 
@@ -506,275 +630,117 @@ plot_temp_mean_diffs <- function(df_from_feols, xmin, xmax){
 
 plot_temp_mean_diffs(feols_results_race_meandiffs, -20, 60)
 
-#left off here 2022-02-06
-
-County_CDDs_2012 <- Temperatures_XGBoost_summer_avgs %>%
-  filter(year==2012) %>%
-  left_join(., Tract_RaceEthn_Census %>% select(GEOID, Total_pop, census_year, State_FIPS, County_FIPS), by = c("GEOID", "census_year")) %>%
-  group_by(County_FIPS, State_FIPS) %>%
-  summarise(avg_cdd = weighted.mean(cdd_summer, Total_pop))
-
-# tract_2010_shp %>% 
-#   select(-Total_pop) %>% 
-#   mutate(County_FIPS = str_sub(GEOID, 1, 5)) %>%
-#   group_by(County_FIPS) %>%
-#   st_union() %>%
-#   st_cast() %>%
-#   ggplot() + 
-#   geom_sf()
-
-county_shp <- get_estimates(geography = "county",
-              variables = "RNETMIG",
-              year = 2015,
-              geometry = TRUE,
-              resolution = "20m", 
-              state = NEMIA_States)
-
-County_CDDs_2012_shp <- county_shp %>%
-  select(-variable, -value) %>%
-  left_join(., County_CDDs_2012, by = c("GEOID" = "County_FIPS"))
-
-County_CDDs_2012_shp %>%
-  ggplot(aes(fill = avg_cdd)) + 
-  geom_sf() +
-  tm_facets(by = "State_FIPS")
-
-County_CDDs_2012_shp %>%
-tm_shape() +
-  tm_polygons(col = 'avg_cdd',
-              title = "Avg CDDs",
-              style = 'cont') +               
-  tm_facets(by = 'State_FIPS', ncol = 1)
-
-create_state_map <- function(df, state){
+jackknife_resids_for_fixest <- function(model){
   
-  plot_state <- df %>% 
-    filter(State_FIPS == state) %>%
-    ggplot(aes(fill = avg_cdd)) + 
-    geom_sf() + 
-    theme_no_axes() +
-    #coord_sf(expand = F) +
-    theme(panel.border = element_blank()) +
-    scale_fill_gradient2(
-      name = "Cooling degree days (F)",
-      low = scales::muted("blue"),
-      mid = "yellow",
-      high = scales::muted("red"),
-      midpoint = 890,
-      #breaks = c(-20, 0, 20, 40),
-      limits = c(197, 1600)) 
+  std_resid <- scale(model$residuals)
+  n <- model$nobs
+  k <- model$nparams
   
-  return(plot_state)
+  resids <- std_resid*((((n - k - 2)/(n - k - 1 - std_resid^2)))^(1/2))
+  
+  return(resids)
 }
-
-
-table_lmer_results <- lmer_results_race_meandiffs %>%
-  mutate(estimate = paste0(round(value, 1), " (", round(lower_ci,1), "-", round(upper_ci, 1),")")) %>%
-    select(name, state_fips, estimate) %>%
-    mutate(name = str_remove(name, "race")) %>%
-    pivot_wider(names_from = name, values_from = estimate) %>%
-    left_join(., get_state_names_from_fips(), by = "state_fips") %>%
-    rename("State" = "Name") %>%
-    mutate(State = if_else(state_fips==0, "Entire region", State)) %>%
-    select(State, Black, Latino, BIPOC)
-
-entire_region_plot <- County_CDDs_2012_shp %>% 
-  ggplot(aes(fill = avg_cdd)) + 
-  geom_sf() + 
-  #theme_no_axes()  +
-  scale_fill_gradient2(
-    name = "Cooling degree days (F)",
-    low = scales::muted("blue"),
-    mid = "yellow",
-    high = scales::muted("red"),
-    midpoint = 890,
-    limits = c(197, 1600)) +
-  theme_minimal() +
-  theme(panel.border = element_blank(),
-        legend.position = c(.2, .8),
-        legend.key = element_rect(color = "transparent", fill = "transparent"))
-
-entire_region_plot + annotation_custom(gridExtra::tableGrob(table_lmer_results, rows = NULL, 
-                                                            theme = ttheme_default(base_size = 9, 
-                                                                                   padding = unit(c(1.5,1.5), "mm"))),
-                                       xmin=-74.5, xmax=-65, ymin=36, ymax=40) 
-# 
-# (create_state_map(County_CDDs_2012_shp, 23) / create_state_map(County_CDDs_2012_shp, "33")/ 
-#     create_state_map(County_CDDs_2012_shp, 50)/ create_state_map(County_CDDs_2012_shp, 25)/
-#     create_state_map(County_CDDs_2012_shp, 44)/ create_state_map(County_CDDs_2012_shp, "09")/
-#     create_state_map(County_CDDs_2012_shp, 36)/ create_state_map(County_CDDs_2012_shp, 34)/
-#     create_state_map(County_CDDs_2012_shp, 42)/create_state_map(County_CDDs_2012_shp, 54)/
-#     create_state_map(County_CDDs_2012_shp, 10)/ create_state_map(County_CDDs_2012_shp, 24)/
-#     create_state_map(County_CDDs_2012_shp, 11)/ create_state_map(County_CDDs_2012_shp, 51)) + 
-#   plot_layout(guides = 'collect') +
-#   plot_layout(ncol = 2) & 
-#   theme(plot.margin = margin(t = 0, r = 0, b = 0, l = 0, unit = "pt"))
-
-
-  
-## try with LMER
-
-
-
-
-
-#then state by state?
-lmer_temp_cdds_ny <- lmer(cdd_summer ~ race + County_FIPS + (1|year), data = Temperature_w_Censusdata %>% filter(state == "36"))
-summary(lmer_temp_cdds_ny)
-
-White_temps <- Temperature_w_Censusdata %>%
-  filter(race=="White")
-
-Temperature_w_Censusdata1 <- Temperature_w_Censusdata %>%
-  ungroup() %>%
-  filter(race != "White") %>%
-  left_join(., White_temps, by = c("County_FIPS", "year")) %>%
-  mutate(split_var = paste(year, race.x, race.y, sep = "."))
-
-split_names <- Temperature_w_Censusdata1 %>%
-  distinct(split_var)
-
-CDD_results <- Temperature_w_Censusdata1 %>%
-  split(.$split_var) %>%
-  map_dfr(., ~tidy(t.test(.$cdd_summer.x, .$cdd_summer.y, paired = T))) %>% #how to identify them??
-  mutate(temp = "cdd") %>%
-  bind_cols(., split_names)
-
-# mean_diff_results1 <- mean_diff_results %>%
-#   group_by(race, temp_model, temp) %>%
-#   mutate_at(vars(estimate, conf.low, conf.high), ~round(., 2)) %>%
-#   summarise(min = min(estimate), 
-#             max = max(estimate),
-#             ci_range = paste0(min(conf.low), "-", max(conf.high))) %>%
-#   ungroup() %>%
-#   pivot_longer(cols = c("min", "max"), names_to = "estimate_type", values_to = "value") %>%
-#   mutate(paired = rep(1:(n()/2),each=2))
-
-# md_cdd <- mean_diff_results1 %>% 
-#   filter(temp == "cdd") %>%
-#   ggplot(aes(x= value, y= temp_model)) +
-#   geom_line(aes(group = paired))+
-#   geom_point(size=4) + #aes(color=estimate_type),
-#   theme(legend.position="top") +
-#   facet_grid(race ~ .) + 
-#   theme_light() + 
-#   theme(axis.title.y=element_blank(), legend.position = "none",  strip.background = element_blank(),
-#         strip.text.x = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank(), plot.margin = margin(1, 0, 1, 0))+
-#   xlab(label = "Cooling Degree Days (C°)") 
-# 
-# md_cdh <- mean_diff_results1 %>% 
-#   filter(temp == "nighttime_cdh") %>%
-#   ggplot(aes(x= value, y= temp_model)) +
-#   geom_line(aes(group = paired))+
-#   geom_point(size=4) + #aes(color=estimate_type), 
-#   theme(legend.position="top") +
-#   facet_grid(race ~ .) + 
-#   theme_light() + 
-#   theme(axis.title.y=element_blank(), legend.position = "none", axis.text.y = element_blank(), axis.ticks.y = element_blank(), plot.margin = margin(1, .25, 1, 0))+
-#   xlab(label = "Nighttime Cooling Degree Hours (C°)") 
-# 
-# md_heatindx <- mean_diff_results1 %>% 
-#   filter(temp == "heat_index") %>%
-#   ggplot(aes(x= value, y= temp_model)) +
-#   geom_line(aes(group = paired))+
-#   geom_point(size=4) + #aes(color=estimate_type), 
-#   theme(legend.position="top") +
-#   facet_grid(race ~ .) + 
-#   theme_light() + 
-#   theme(axis.title.y=element_blank(), legend.position = "none", strip.background = element_blank(),
-#         strip.text.x = element_blank(), plot.margin = margin(1, 0, 1, 1)) +
-#   xlab(label = "Average Heat Index (C°)") 
-# 
-# md_compiled <- md_heatindx + md_cdd + md_cdh
-
-median_estimates <- mean_diff_results %>%
-  group_by(temp, race, temp_model) %>%
-  summarise(median_estimate = median(estimate))
-
-mean_diff_results_medianest <- mean_diff_results %>%
-  left_join(., median_estimates, by = c("temp", "race", "temp_model")) %>%
-  mutate(x1 = if_else(temp_model == "XGBoost", 1.5, 0.5),
-         x2 = if_else(temp_model == "XGBoost", 2.5, 1.5))
-
-md_cdd <- mean_diff_results_medianest %>% 
-  filter(temp == "cdd") %>%
-  ggplot(aes(x = temp_model, y = estimate)) +
-  #geom_line(aes(group = paired))+
-  geom_sina() +
-  theme(legend.position="top") +
-  facet_grid(race ~ .) + 
-  geom_segment(aes(x = x1, xend = x2, y = median_estimate, yend = median_estimate), color = "red", linetype = 2) + 
-  coord_flip() +
-  theme_light() + 
-  theme(axis.title.y=element_blank(), legend.position = "none", strip.background = element_blank(),
-                 strip.text.x = element_blank(), plot.margin = margin(1, 0, 1, 1))+
-  ylab(label = "Cooling Degree Days (C°)") 
-
-md_cdh <- mean_diff_results_medianest %>% 
-  filter(temp == "nighttime_cdh") %>%
-  ggplot(aes(x = temp_model, y = estimate)) +
-  #geom_line(aes(group = paired))+
-  geom_sina() +
-  theme(legend.position="top") +
-  facet_grid(race ~ .) + 
-  geom_segment(aes(x = x1, xend = x2, y = median_estimate, yend = median_estimate), color = "red", linetype = 2) + 
-  coord_flip() +
-  theme_light() + 
-  theme(axis.title.y=element_blank(), legend.position = "none", axis.text.y = element_blank(), axis.ticks.y = element_blank(), plot.margin = margin(1, .25, 1, 0))+
-  ylab(label = "Nighttime Cooling Degree Hours (C°)") 
-
-# md_heatindx <- mean_diff_results1 %>% 
-#   filter(temp == "heat_index") %>%
-#   ggplot(aes(x= value, y= temp_model)) +
-#   geom_line(aes(group = paired))+
-#   geom_point(aes(color=estimate_type), size=4) +
-#   theme(legend.position="top") +
-#   facet_grid(race ~ .) + 
-#   theme_light() + 
-#   theme(axis.title.y=element_blank(), legend.position = "none", strip.background = element_blank(),
-#         strip.text.x = element_blank(), plot.margin = margin(1, 0, 1, 1)) +
-#   xlab(label = "Average Heat Index (C°)") 
-
-md_compiled <- md_cdd + md_cdh
-
-md_compiled
-
-
-
-
-
 #### Look at relationship between segregation and temperature ####
 
 pct_seg <- Tract_RaceEthn_Census %>%
   filter(Total_pop>0) %>%
-  mutate_at(vars(Black, Latinx, BIPOC, White), ~./Total_pop) %>%
-  rename(pct_bipoc_seg = BIPOC,
-         pct_black_seg = Black,
-         pct_latinx_seg = Latinx) %>% #pct_white_seg = White
-  select(GEOID, pct_black_seg, pct_latinx_seg, pct_bipoc_seg, ICE_black_seg, ICE_bipoc_seg, ICE_latinx_seg, census_year, State_FIPS, County_FIPS) #pct_white_seg,
+  mutate_at(vars(Black, Latino, Asian, White), ~./Total_pop) %>%
+  rename(pct_asian = Asian,
+         pct_black = Black,
+         pct_latinx = Latino,
+         pct_white = White) %>% 
+  select(GEOID, pct_black, pct_latinx, pct_asian, pct_white, ICE_black_seg, ICE_bipoc_seg, ICE_latinx_seg, 
+         ICE_asian_seg, Total_pop, census_year, State_FIPS, County_FIPS, RUCA_code1, RUCA_code2, urban) 
 
-Temperatures_NLDAS_resseg <- Temperatures_NLDAS %>%
-  left_join(., pct_seg, by = c("census_year", "GEOID")) %>%
-  mutate(year = factor(year),
-         County_FIPS = as.factor(County_FIPS)) %>%
-  select(-noaa_cdd, -census_year, -mean_temp_summer) %>%
-  pivot_longer(cols = ends_with("seg"), names_to = "res_seg", values_to = "pct") %>%
-  pivot_longer(cols = c("cdd_summer", "nighttime.cdh_summer", "mean_htindx_summer"), names_to = "temp_measure", values_to = "temp") %>%
-  mutate(model = "NLDAS",
-         split = paste(model, res_seg, temp_measure, year, sep = "."))
+# Temperatures_NLDAS_resseg <- Temperatures_NLDAS %>%
+#   left_join(., pct_seg, by = c("census_year", "GEOID")) %>%
+#   mutate(year = factor(year),
+#          County_FIPS = as.factor(County_FIPS)) %>%
+#   select(-noaa_cdd, -census_year, -mean_temp_summer) %>%
+#   pivot_longer(cols = ends_with("seg"), names_to = "res_seg", values_to = "pct") %>%
+#   pivot_longer(cols = c("cdd_summer", "nighttime.cdh_summer", "mean_htindx_summer"), names_to = "temp_measure", values_to = "temp") %>%
+#   mutate(model = "NLDAS",
+#          split = paste(model, res_seg, temp_measure, year, sep = "."))
 
 # Temperatures_NLDAS_resseg %>% filter(temp_measure=="cdd_summer") %>%
 # ggplot(aes(x = ICE_black, y = temp)) + geom_point() + geom_smooth(method = "loess")
 
-Temperatures_XGBoost_resseg <- Temperatures_XGBoost %>%
+Temperatures_XGBoost_resseg <- Temperatures_XGBoost_summer_avgs %>%
   left_join(., pct_seg, by = c("census_year", "GEOID")) %>%
-  mutate(year = as.factor(year),
-         County_FIPS = as.factor(County_FIPS)) %>%
-  select(-noaa_cdd, -census_year, -mean_temp_summer) %>%
-  pivot_longer(cols = ends_with("seg"), names_to = "res_seg", values_to = "pct") %>%
-  pivot_longer(cols = c("cdd_summer", "nighttime.cdh_summer", "mean_htindx_summer"), names_to = "temp_measure", values_to = "temp") %>%
-  mutate(model = "XGBoost",
-         split = paste(model, res_seg, temp_measure, year, sep = ".")) 
+  filter(Total_pop>0) %>%
+  mutate(year = as.factor(year), #, ordered = T
+         County_FIPS = as.factor(County_FIPS),
+         ICE_bipoc_above_point5 = if_else(ICE_bipoc_seg>=.5, "high_white", "low_white")) %>%
+  inner_join(., sfc_as_cols(tract_centroids1), by = c("GEOID", "census_year")) 
+
+# start <- proc.time()
+# bam_model = mgcv::bam(cdd_summer ~  s(ICE_bipoc_seg, bs = "tp", k = 4) + County_FIPS + year + factor(RUCA_code2) +
+#                         te(x, y, elevation, year, d = c(3,1), bs = c("gp", "re")), 
+#                       family = inverse.gaussian(), data=Temperatures_XGBoost_resseg, 
+#                       discrete = T, nthreads = 2)
+# proc.time() - start 
+
+bam_model2 = mgcv::bam(cdd_summer ~  s(ICE_bipoc_seg, bs = "cr", k = 4) + County_FIPS +  
+                         s(elevation, bs = "cr", k = 4) + factor(RUCA_code2) +
+                           te(x, y, year, d = c(2,1), bs = c("gp", "re"), m = 2), 
+                      family = scat(), data=Temperatures_XGBoost_resseg, 
+                      discrete = T, nthreads = 2)
+#According to this: https://stats.stackexchange.com/questions/401278/step-failure-in-theta-estimation-using-bam-in-mgcv
+#the scat distribution always throws an error but produces valid results 
+sim_dharma_bam <- simulateResiduals(bam_model2, n = 1000)
+testUniformity(simulationOutput = sim_dharma_bam)
+
+dharmaRes <- createDHARMa(simulatedResponse = sim_dharma_bam$scaledResiduals, 
+                          observedResponse = scale(bam_model2$residuals))
+
+plot(dharmaRes, quantreg = FALSE)
+dharma_bam <- createDHARMa(bam_model2$fitted.values, bam_model2$y)
+
+resids <- Temperatures_XGBoost_resseg %>% bind_cols(., resids = scale(residuals(bam_model)))%>% filter(abs(resids)>3) %>%   
+  st_as_sf(.,coords=c("x","y"),crs=4326) %>%
+  mutate(resids1 = factor(if_else(resids>0, "high", "low")))
+
+
+ggplot() + 
+  geom_sf(data = Temperatures_XGBoost_resseg %>% 
+            filter(!GEOID %in% resids$GEOID) %>% 
+            st_as_sf(., coords=c("x", "y"), crs=4326)) +
+  geom_sf(data = resids, aes(color = resids1)) +
+  facet_wrap(~year)
+
+#6:08 County_FIPS +
+#splines::ns(ICE_black_seg,2) + splines::ns(ICE_latinx_seg,2) + splines::ns(ICE_asian_seg, 2)
+
+
+
+
+feols_bipoc_results <- feols(cdd_summer ~ factor(ICE_bipoc_above_point5)|factor(County_FIPS) + factor(year), 
+                             panel.id=c('GEOID', 'year'), data = Temperatures_XGBoost_resseg, ~GEOID)
+plot(residuals(feols_bipoc_results))
+sigma <- feols_bipoc_results$sigma2
+plot(feols_bipoc_results$residuals/(sigma*sqrt(1-(hat(model.matrix(feols_bipoc_results)))))) #studentized residuals
+hist(residuals(feols_bipoc_results), density=20, breaks=20, probability = T)
+curve(dnorm(x, mean=mean(residuals(feols_bipoc_results)), sd=sd(residuals(feols_bipoc_results))),
+      col="darkblue", lwd=2, add=TRUE, yaxt="n")
+qqnorm(residuals(feols_bipoc_results));qqline(residuals(feols_bipoc_results))
+plot(jackknife_resids_for_fixest(feols_bipoc_results))
+Temperatures_XGBoost_resseg %>%
+  filter(year == "2011" & Total_pop>0) %>%
+  ggplot(aes(x = cdd_summer, y = ICE_bipoc_seg)) + 
+  geom_point() + 
+  geom_smooth(method = "loess") + 
+  facet_wrap(~State_FIPS, scales = "free_x")
+
+Temperatures_XGBoost_resseg %>%
+  filter(year == "2016" & Total_pop>0) %>%
+  #mutate(ICE_black_greater0 = if_else(ICE_black_seg>))
+  ggplot(aes(x = cdd_summer, y = ICE_black_seg)) + 
+  geom_point() + 
+  geom_smooth(method = lm, formula = y ~ splines::ns(x, 3), se = T)  
+  facet_wrap(~State_FIPS, scales = "free_x")
+
+
+feols()
 
 length(unique(Tract_RaceEthn_2000Census$GEOID[Tract_RaceEthn_2000Census$Total_pop>0]))
 length(unique(Tract_RaceEthn_2000Census$GEOID[Tract_RaceEthn_2010Census$Total_pop>0]))
