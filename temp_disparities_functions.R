@@ -220,143 +220,131 @@ create_weighted_race_hours_NEMIA <- function(year, urban = c("metropolitan", "no
 
 }
 
-# plan(multisession(workers = 12))
-# all_years <- as.character(seq.int(2003, 2019))
+make_contour_plot_by_race <- function(dataframe, year_to_plot){
 
-# race_hour_temps_NEMIA_metro <- all_years %>%
-#   future_map_dfr(., ~create_weighted_race_hours_NEMIA(.x, urban = "metropolitan"), .progress = T)
-# race_hour_temps_NEMIA_notmetro <- all_years %>%
-#   future_map_dfr(., ~create_weighted_race_hours_NEMIA(.x, urban = "not_metropolitan"), .progress = T)
+  plot <- ggplot(dataframe %>% filter(year==year_to_plot), aes(date, hour, z = temp_f)) + #, breaks = c(0,12,18,24,30,36)
+    geom_contour_fill(aes(fill = stat(level)), breaks = c(32,55,65,75,90,105)) + 
+    facet_wrap(.~race, ncol = 1) +
+    scale_x_date(labels = function(x) format(x, "%b")) +
+    scale_fill_divergent_discretised(low = "#4e714f", mid = "#e9cc78", high = "#984c45", midpoint = 65,
+                                     name = "Temperature (°F)", guide = guide_coloursteps(show.limits = T, barwidth = 12)) +
+    scale_y_reverse(breaks = c(0,6,12,18,23), labels = c("12 AM", "6 AM", "12 PM", "6 PM", "11 PM")) +
+    ylab("Hour of day") +
+    theme_minimal(base_size = 16) +
+    theme(legend.position = "bottom", axis.title.x=element_blank(), axis.title.y = element_blank())
 
-# make_contour_plot_by_race <- function(dataframe, year_to_plot){
-# 
-#   plot <- ggplot(dataframe %>% filter(year==year_to_plot), aes(date, hour, z = temp_f)) + #, breaks = c(0,12,18,24,30,36)
-#     geom_contour_fill(aes(fill = stat(level)), breaks = c(32,55,65,75,90,105)) +
-#     facet_wrap(.~race, ncol = 1) +
-#     scale_x_date(labels = function(x) format(x, "%b")) +
-#     scale_fill_divergent_discretised(low = "#4e714f", mid = "#e9cc78", high = "#984c45", midpoint = 65,
-#                                      name = "Temperature (°F)", guide = guide_coloursteps(show.limits = T, barwidth = 12)) +
-#     scale_y_reverse(breaks = c(0,6,12,18,23), labels = c("12 AM", "6 AM", "12 PM", "6 PM", "11 PM")) +
-#     ylab("Hour of day") +
-#     theme_minimal(base_size = 16) +
-#     theme(legend.position = "bottom", axis.title.x=element_blank(), axis.title.y = element_blank())
-# 
-#   return(plot)
-# }
-# 
-# make_contour_plot_by_race_and_development <- function(dataframe_metro, dataframe_nonmetro, year_to_plot){
-# 
-#   plot_metro <- make_contour_plot_by_race(dataframe_metro, year_to_plot) +
-#     ggtitle("Metropolitan") +
-#     theme(axis.title.y = element_text("Hour of day", angle = 90, vjust = 0.9),
-#           plot.title = element_text(hjust = 0.5))
-# 
-#   plot_nonmetro <- make_contour_plot_by_race(dataframe_nonmetro, year_to_plot) +
-#     ggtitle("Micropolitan and Rural") +
-#     theme(axis.text.y = element_blank(),
-#           plot.title = element_text(hjust = 0.5))
-# 
-#   plot_metro_and_non <- (plot_metro + plot_nonmetro) + plot_layout(guides = 'collect') &
-#     #plot_annotation(title = paste("Air temperature by development type in", year_to_plot))
-#     theme(legend.position = 'bottom', plot.title = element_text(size = 14))
-# 
-#   return(plot_metro_and_non)
-# 
-# }
-# 
-# make_contour_plot_by_race_and_development(race_hour_temps_NEMIA_metro, race_hour_temps_NEMIA_notmetro, 2013)
-# 
-# 
-# 
+  return(plot)
+}
+
+make_contour_plot_by_race_and_development <- function(dataframe_metro, dataframe_nonmetro, year_to_plot){
+
+  plot_metro <- make_contour_plot_by_race(dataframe_metro, year_to_plot) +
+    ggtitle("Metropolitan") +
+    theme(axis.title.y = element_text("Hour of day", angle = 90, vjust = 0.9),
+          plot.title = element_text(hjust = 0.5))
+
+  plot_nonmetro <- make_contour_plot_by_race(dataframe_nonmetro, year_to_plot) +
+    ggtitle("Micropolitan and Rural") +
+    theme(axis.text.y = element_blank(),
+          plot.title = element_text(hjust = 0.5))
+
+  plot_metro_and_non <- (plot_metro + plot_nonmetro) + plot_layout(guides = 'collect') &
+    #plot_annotation(title = paste("Air temperature by development type in", year_to_plot))
+    theme(legend.position = 'bottom', plot.title = element_text(size = 14))
+
+  return(plot_metro_and_non)
+
+}
+
 # #### Visualize annual CDD density plots by race/ethnicity faceted by state #### 
-# 
-# plot_state_temps_density <- function(df, plot_year, state_fips, temp_measure, xmin, xmax){
-#   
-#   df1 <- df %>%
-#     filter(year == plot_year & State_FIPS == state_fips) %>%
-#     mutate(weight = estimate/sum(estimate))
-#   
-#   medians <- df1 %>%
-#     group_by(race) %>%
-#     summarise(median = matrixStats::weightedMedian(get(temp_measure), estimate))
-#   
-#   df2 <- df1 %>% 
-#     left_join(., medians, by = "race")
-#   
-#   State_name <- df1$Name[1]
-#   
-#   plot <- ggplot() +
-#     geom_density_ridges(data = df1, aes(x = cdd_summer, 
-#                                         y = race, 
-#                                         group = race,
-#                                         height=..density.., 
-#                                         weight=weight),    
-#                         scale= 0.95,
-#                         stat="density") +
-#     xlim(xmin, xmax) +
-#     geom_point(data = medians, aes(x = median, y = race), size = 2, shape = 23, color = "black", fill = "grey", position = position_nudge(y = 0.1)) +
-#     theme_minimal() +
-#     ggtitle(State_name) +
-#     theme(text = element_text(size = 12), axis.title.x = element_blank(), axis.title.y = element_blank(), 
-#           plot.title = element_text(hjust = 0.5)) 
-#   
-#   return(plot)
-# }
+ 
+plot_state_temps_density <- function(df, plot_year, state_fips, temp_measure, xmin, xmax){
+
+  df1 <- df %>%
+    filter(year == plot_year & State_FIPS == state_fips) %>%
+    mutate(weight = estimate/sum(estimate))
+
+  medians <- df1 %>%
+    group_by(race) %>%
+    summarise(median = matrixStats::weightedMedian(get(temp_measure), estimate))
+
+  df2 <- df1 %>%
+    left_join(., medians, by = "race")
+
+  State_name <- df1$Name[1]
+
+  plot <- ggplot() +
+    geom_density_ridges(data = df1, aes(x = cdd_summer,
+                                        y = race,
+                                        group = race,
+                                        height=..density..,
+                                        weight=weight),
+                        scale= 0.95,
+                        stat="density") +
+    xlim(xmin, xmax) +
+    geom_point(data = medians, aes(x = median, y = race), size = 2, shape = 23, color = "black", fill = "grey", position = position_nudge(y = 0.1)) +
+    theme_minimal() +
+    ggtitle(State_name) +
+    theme(text = element_text(size = 12), axis.title.x = element_blank(), axis.title.y = element_blank(),
+          plot.title = element_text(hjust = 0.5))
+
+  return(plot)
+}
 # 
 # # plot_state_temps_density(temps_for_ggplot_density, 2010, "23", "cdd_summer", 0, 1100)
 # 
-# plot_densities <- function(temperature_df, census_df, temp_measure, plot_year){
-#   
-#   temperature_df1 <- temperature_df %>%
-#     left_join(., census_df, by = c("census_year", "GEOID")) %>%
-#     filter(Total_pop>0)
-#   
-#   temps_for_ggplot_density <- temperature_df1 %>%
-#     select(-census_year, -Total_pop, -ICE_black_seg, -ICE_bipoc_seg, -ICE_latinx_seg, -Other) %>% #modify this as needed 
-#     pivot_longer(cols = c("Black", "White", "Latino", "Asian"), names_to = "race", values_to = "estimate") %>%
-#     left_join(., get_state_names_from_fips(), by = "State_FIPS") 
-#   
-#   # first_column <- c("23", "33", "50", "25", "44")
-#   # second_column <- c("09", "36", "34", "42", "54")
-#   # third_column <- c("10", "24", "11", "51")
-#   
-#   # min_and_max_first_column <- temps_for_ggplot_density %>%
-#   #   filter(str_detect(State_FIPS, third_column)) %>%
-#   #   summarise(min_temp = min(get(temp_measure)),
-#   #             max_temp = max(get(temp_measure)))
-#   
-#   remove_x <- theme(axis.text.x = element_blank(),
-#                     axis.ticks.x = element_blank(),
-#                     axis.title.x = element_blank())
-#   
-#   first <- ((plot_state_temps_density(temps_for_ggplot_density, plot_year, 23, "cdd_summer", 0, 1150) + remove_x)/
-#               (plot_state_temps_density(temps_for_ggplot_density, plot_year, 33, "cdd_summer", 0, 1150)+ remove_x)/
-#               (plot_state_temps_density(temps_for_ggplot_density, plot_year, 50, "cdd_summer", 0, 1150)+ remove_x)/
-#               (plot_state_temps_density(temps_for_ggplot_density, plot_year, 25, "cdd_summer", 0, 1150)+ remove_x)/
-#               plot_state_temps_density(temps_for_ggplot_density, plot_year, 44, "cdd_summer", 0, 1150)) 
-#   
-#   second <- ((plot_state_temps_density(temps_for_ggplot_density, plot_year, "09", "cdd_summer", 95, 1900) + remove_x)/
-#                (plot_state_temps_density(temps_for_ggplot_density, plot_year, 36, "cdd_summer", 95, 1900)+ remove_x)/
-#                (plot_state_temps_density(temps_for_ggplot_density, plot_year, 34, "cdd_summer", 95, 1900)+ remove_x)/
-#                (plot_state_temps_density(temps_for_ggplot_density, plot_year, 42, "cdd_summer", 95, 1900)+ remove_x)/
-#                plot_state_temps_density(temps_for_ggplot_density, plot_year, 54, "cdd_summer", 95, 1900))
-#   
-#   #below trims ~8 rows of data on the lower end of the distribution for XGBoost model  
-#   third <- ((plot_state_temps_density(temps_for_ggplot_density, plot_year, 10, "cdd_summer", 500, 2200) + remove_x)/
-#               (plot_state_temps_density(temps_for_ggplot_density, plot_year, 24, "cdd_summer", 500, 2200)+ remove_x)/
-#               (plot_state_temps_density(temps_for_ggplot_density, plot_year, 11, "cdd_summer", 500, 2200)+ remove_x)/
-#               (plot_state_temps_density(temps_for_ggplot_density, plot_year, 51, "cdd_summer", 500, 2200)) / 
-#               plot_spacer() + theme(plot.margin = unit(c(15,0,0,0), "pt")))
-#   
-#   plot_densities <- (first | second| third) + plot_annotation(
-#     caption = "Cooling degree days (F)",
-#     theme = theme(
-#       plot.caption = element_text(size = 12, hjust = 0.5, face = "bold")
-#     )
-#   )
-#   
-#   return(plot_densities)
-# }
+plot_densities <- function(temperature_df, census_df, temp_measure, plot_year){
+
+  temperature_df1 <- temperature_df %>%
+    left_join(., census_df, by = c("census_year", "GEOID")) %>%
+    filter(Total_pop>0)
+
+  temps_for_ggplot_density <- temperature_df1 %>%
+    select(-census_year, -Total_pop, -ICE_black_seg, -ICE_bipoc_seg, -ICE_latinx_seg, -Other) %>% #modify this as needed
+    pivot_longer(cols = c("Black", "White", "Latino", "Asian"), names_to = "race", values_to = "estimate") %>%
+    left_join(., get_state_names_from_fips(), by = "State_FIPS")
+
+  # first_column <- c("23", "33", "50", "25", "44")
+  # second_column <- c("09", "36", "34", "42", "54")
+  # third_column <- c("10", "24", "11", "51")
+
+  # min_and_max_first_column <- temps_for_ggplot_density %>%
+  #   filter(str_detect(State_FIPS, third_column)) %>%
+  #   summarise(min_temp = min(get(temp_measure)),
+  #             max_temp = max(get(temp_measure)))
+
+  remove_x <- theme(axis.text.x = element_blank(),
+                    axis.ticks.x = element_blank(),
+                    axis.title.x = element_blank())
+
+  first <- ((plot_state_temps_density(temps_for_ggplot_density, plot_year, 23, "cdd_summer", 0, 1150) + remove_x)/ #later -- find way to programmatically adjust x axis limits?
+              (plot_state_temps_density(temps_for_ggplot_density, plot_year, 33, "cdd_summer", 0, 1150)+ remove_x)/
+              (plot_state_temps_density(temps_for_ggplot_density, plot_year, 50, "cdd_summer", 0, 1150)+ remove_x)/
+              (plot_state_temps_density(temps_for_ggplot_density, plot_year, 25, "cdd_summer", 0, 1150)+ remove_x)/
+              plot_state_temps_density(temps_for_ggplot_density, plot_year, 44, "cdd_summer", 0, 1150))
+
+  second <- ((plot_state_temps_density(temps_for_ggplot_density, plot_year, "09", "cdd_summer", 95, 1900) + remove_x)/
+               (plot_state_temps_density(temps_for_ggplot_density, plot_year, 36, "cdd_summer", 95, 1900)+ remove_x)/
+               (plot_state_temps_density(temps_for_ggplot_density, plot_year, 34, "cdd_summer", 95, 1900)+ remove_x)/
+               (plot_state_temps_density(temps_for_ggplot_density, plot_year, 42, "cdd_summer", 95, 1900)+ remove_x)/
+               plot_state_temps_density(temps_for_ggplot_density, plot_year, 54, "cdd_summer", 95, 1900))
+
+  #below currently trims ~8 rows of data on the lower end of the distribution for XGBoost model
+  third <- ((plot_state_temps_density(temps_for_ggplot_density, plot_year, 10, "cdd_summer", 500, 2200) + remove_x)/
+              (plot_state_temps_density(temps_for_ggplot_density, plot_year, 24, "cdd_summer", 500, 2200)+ remove_x)/
+              (plot_state_temps_density(temps_for_ggplot_density, plot_year, 11, "cdd_summer", 500, 2200)+ remove_x)/
+              (plot_state_temps_density(temps_for_ggplot_density, plot_year, 51, "cdd_summer", 500, 2200)) /
+              plot_spacer() + theme(plot.margin = unit(c(15,0,0,0), "pt")))
+
+  plot_densities <- (first | second| third) + plot_annotation(
+    caption = "Cooling degree days (F)",
+    theme = theme(
+      plot.caption = element_text(size = 12, hjust = 0.5, face = "bold")
+    )
+  )
+
+  return(plot_densities)
+}
 # 
 # plot_densities(Temperatures_XGBoost_summer_avgs, Tract_RaceEthn_Census, "cdd_summer", 2010)
 # plot_densities(Temperatures_NLDAS_summer_avgs, Tract_RaceEthn_Census, "cdd_summer", 2010)

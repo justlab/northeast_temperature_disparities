@@ -26,7 +26,7 @@ temperatureexcess <- function(temperature, threshold = 65){
 }
 FtoK = function(fahrenheit) (5/9) * (fahrenheit + 459.67)
 KtoF = function(kelvins) (9/5) * kelvins - 459.67
-setDTthreads(threads = 10)
+setDTthreads(threads = 6)
 
 # MODIS-based model predictions ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ####
 
