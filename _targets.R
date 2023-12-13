@@ -2,14 +2,20 @@ library(targets)
 library(tarchetypes)
 library(future)
 library(future.callr)
-source("temp_disparities_functions.R")
+source("code/Analysis_Functions.R")
 plan(callr)
-options(tidyverse.quiet = TRUE)
+
+# The tigris option can be set as you have done:
+options(tigris_use_cache = TRUE)
+
+# The supplemental analysis can be skipped if desired:
+options(SKIP_SUPPL_ANALYSIS = FALSE)
 
 tar_option_set(
   packages = c(
     "tidyverse",
     "tidycensus",
+    "here",
     "fst",
     "sf",
     "lubridate",
@@ -19,51 +25,151 @@ tar_option_set(
     "broom",
     "DescTools",
     "metR",
-    "readxl"
+    "readxl",
+    "wec",
+    "fixest",
+    "mgcv",
+    "elevatr",
+    "matrixStats",
+    "spdep",
+    "tigris",
+    "spatstat",
+    "maptools",
+    "gratia",
+    "grid",
+    "marginaleffects",
+    "ggExtra",
+    "ggpubr"
   ),
-  format = 'qs', 
+  format = 'rds', 
   workspace_on_error = TRUE
 )
-NEMIA_States <- c("09", "23", "25", "33", "44", "50",
-                  "34", "36", "42",
-                  "10", "11", "24", "51", "54")
-all_years <- as.character(seq.int(2003, 2019))
+
+
 
 list(
-  tar_target(summarized_temps_file,
-    "data/summarized_daily_temp_preds_F.fst",
-    format = "file"),
+  # LOAD FILES ####
+  tar_target(temperatures_xgboost, {
+    read_temperatures_xgboost()
+  }),
+  tar_target(fips_to_statename_crosswalk, {
+    get_state_names_from_fips()
+  }),
+  tar_target(Tract_RaceEthn_Census, {
+    get_Census_tract_data()
+  }),
+  tar_target(tract_centroids, {
+    get_tract_xy_and_elevation()
+  }),
   
-  tar_target(summarized_temps,
-    read_fst(summarized_temps_file)),
   
-  tar_target(Temperatures_XGBoost_summer_avgs,
-    clean_and_summarize_temperatures(summarized_temps)),
+  # SUMMARIZE FILES ####
+  tar_target(Temperatures_XGBoost_summer_avgs, {
+    clean_and_summarize_temperatures(temperatures_xgboost)
+  }),
   
-  tar_target(RUCAs_2000,
-    get_RUCAs_2000()),
+  #Plot 1 ####
+  tar_target(
+    plot1,
+    {
+      create_plot_1(Temperatures_XGBoost_summer_avgs, Tract_RaceEthn_Census, fips_to_statename_crosswalk)
+    }
+  ),
   
-  tar_target(RUCAs_2010,
-    get_RUCAs_2010()),
+  #Table 1 ####
+  tar_target(
+    table1,
+    {
+      create_table_1(Temperatures_XGBoost_summer_avgs, Tract_RaceEthn_Census,tract_centroids,fips_to_statename_crosswalk)
+    }
+  ),
   
-  tar_target(Tract_RaceEthn_Census,
-    get_Census_tract_data(RUCAs_2000, RUCAs_2010)),
+  #SEGREGATION ####
+  tar_target(
+    Kernel_ResSeg_acrossNEMIA,
+    create_resseg_across_NEMIA_allyears(tract_centroids,Tract_RaceEthn_Census)
+  ),
+  tar_target(
+    Temperatures_w_resseg,
+    {
+      create_df_for_seg_analysis(
+        temp_model = Temperatures_XGBoost_summer_avgs, 
+        census_data = Tract_RaceEthn_Census, 
+        seg_measures = Kernel_ResSeg_acrossNEMIA,
+        tract_centroids
+      )
+    }
+  ),
+  tar_target(
+    all_region_seg_bams,
+    {
+      make_all_region_seg_bams(Temperatures_w_resseg, knots = 3)
+    }
+  ),
   
-  tar_target(race_hour_temps_NEMIA_metro,
-      purrr::map_dfr(all_years, ~create_weighted_race_hours_NEMIA(.x, urban = "metropolitan", Tract_RaceEthn_Census), .progress = T) %>%
-      tar_group(),
-    iteration = "group"),
+  #SEGREGATION PLOTS####
+  tar_target(
+    plot2,
+    {
+      create_plot_2(Temperatures_w_resseg,all_region_seg_bams)
+    }
+  ),
   
-  tar_target(race_hour_temps_NEMIA_notmetro,
-             purrr::map_dfr(all_years, ~create_weighted_race_hours_NEMIA(.x, urban = "not_metropolitan", Tract_RaceEthn_Census), .progress = T) %>%
-               tar_group(),
-             iteration = "group"),
-  
-  tar_target(contour_plots,
-  make_contour_plot_by_race_and_development(race_hour_temps_NEMIA_metro, race_hour_temps_NEMIA_notmetro, 2010)),#update for year to plot
-  
-  tar_target(density_plots,
-             plot_densities(Temperatures_XGBoost_summer_avgs, Tract_RaceEthn_Census, "cdd_summer", 2010)),#update for NLDAS with Temperatures_XGBoost_summer_avgs
+  # Sensitivity and supplemental analyses ####
+  tar_target(
+    supp_table1,
+    {
+      #if (isTRUE(getOption("SKIP_SUPPL_ANALYSIS"))) return(NULL)
+      create_supp_table_1(Temperatures_XGBoost_summer_avgs)
+    }
+  ),
+  tar_target(
+    all_states_seg_bams,
+    {
+      #if (isTRUE(getOption("SKIP_SUPPL_ANALYSIS"))) return(NULL)
+      make_all_states_seg_bams(Temperatures_w_resseg)
+    }
+  ),
+  tar_target(
+    supp_state_plots,
+    {
+      #if (isTRUE(getOption("SKIP_SUPPL_ANALYSIS"))) return(NULL)
+      create_supp_fig_states_seg_regression_plots(Temperatures_w_resseg, all_states_seg_bams)
+    }
+  ),
+  tar_target(
+    all_region_ice_bams,
+    {
+      #if (isTRUE(getOption("SKIP_SUPPL_ANALYSIS"))) return(NULL)
+      make_all_region_ice_bams(Temperatures_w_resseg)
+    }
+  ),
+  tar_target(
+    all_ice_bam_plot,
+    {
+      #if (isTRUE(getOption("SKIP_SUPPL_ANALYSIS"))) return(NULL)
+      create_ice_bam_plots(all_region_ice_bams, Temperatures_w_resseg)
+    }
+  ),
+  tar_target(
+    timeseries_plot,
+    {
+      #if (isTRUE(getOption("SKIP_SUPPL_ANALYSIS"))) return(NULL)
+      create_timeseries_plots(Temperatures_XGBoost_summer_avgs, Tract_RaceEthn_Census, tract_centroids)
+    }
+  ),
+  tar_target(
+    seg_bam_2knots,
+    {
+      #if (isTRUE(getOption("SKIP_SUPPL_ANALYSIS"))) return(NULL)
+      make_all_region_seg_bams(Temperatures_w_resseg, knots = 2)
+    }
+  ),
+  tar_target(
+    seg_plot_2knots,
+    {
+      create_plot_2(Temperatures_w_resseg,all_region_seg_bams, body = F)
+    }
+  )
 )
-# Temperatures_XGBoost <- read_fst(here("data", "summarized_daily_temp_preds_F.fst")) 
-# Temperatures_NLDAS <- read_fst(here("data", "summarized_daily_temp_NLDAS_F.fst")) 
+
