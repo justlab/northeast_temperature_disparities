@@ -5,9 +5,8 @@ library(future.callr)
 source("code/Analysis_Functions.R")
 plan(callr)
 
-# The tigris option can be set as you have done:
 options(tigris_use_cache = TRUE)
-
+options(tidyverse.quiet = TRUE)
 
 tar_option_set(
   packages = c(
