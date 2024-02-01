@@ -8,13 +8,12 @@ plan(callr)
 # The tigris option can be set as you have done:
 options(tigris_use_cache = TRUE)
 
-# The supplemental analysis can be skipped if desired:
-options(SKIP_SUPPL_ANALYSIS = FALSE)
 
 tar_option_set(
   packages = c(
     "tidyverse",
     "tidycensus",
+    "arrow",
     "here",
     "fst",
     "sf",
@@ -119,49 +118,42 @@ list(
   tar_target(
     supp_table1,
     {
-      #if (isTRUE(getOption("SKIP_SUPPL_ANALYSIS"))) return(NULL)
       create_supp_table_1(Temperatures_XGBoost_summer_avgs)
     }
   ),
   tar_target(
     all_states_seg_bams,
     {
-      #if (isTRUE(getOption("SKIP_SUPPL_ANALYSIS"))) return(NULL)
       make_all_states_seg_bams(Temperatures_w_resseg)
     }
   ),
   tar_target(
     supp_state_plots,
     {
-      #if (isTRUE(getOption("SKIP_SUPPL_ANALYSIS"))) return(NULL)
       create_supp_fig_states_seg_regression_plots(Temperatures_w_resseg, all_states_seg_bams)
     }
   ),
   tar_target(
     all_region_ice_bams,
     {
-      #if (isTRUE(getOption("SKIP_SUPPL_ANALYSIS"))) return(NULL)
       make_all_region_ice_bams(Temperatures_w_resseg)
     }
   ),
   tar_target(
     all_ice_bam_plot,
     {
-      #if (isTRUE(getOption("SKIP_SUPPL_ANALYSIS"))) return(NULL)
       create_ice_bam_plots(all_region_ice_bams, Temperatures_w_resseg)
     }
   ),
   tar_target(
     timeseries_plot,
     {
-      #if (isTRUE(getOption("SKIP_SUPPL_ANALYSIS"))) return(NULL)
       create_timeseries_plots(Temperatures_XGBoost_summer_avgs, Tract_RaceEthn_Census, tract_centroids)
     }
   ),
   tar_target(
     seg_bam_2knots,
     {
-      #if (isTRUE(getOption("SKIP_SUPPL_ANALYSIS"))) return(NULL)
       make_all_region_seg_bams(Temperatures_w_resseg, knots = 2)
     }
   ),

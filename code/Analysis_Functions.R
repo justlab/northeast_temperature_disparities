@@ -174,7 +174,7 @@ get_tract_xy_and_elevation <- function(){
   
   tract_centroids <- bind_rows(tract_2000_shp, tract_2010_shp) %>%
     st_centroid() %>% 
-    sfc_as_cols() %>% #may need to be removed or moved to tract_centroids1
+    sfc_as_cols() %>% 
     rename(longitude = x, latitude = y)
   
   elevations <- get_elev_point(tract_centroids, prj = 4326, src = "aws")
@@ -245,7 +245,7 @@ plot_densities <- function(temperature_df, census_df, temp_measure, plot_year,fi
                     axis.ticks.x = element_blank(),
                     axis.title.x = element_blank())
   
-  first <- ((plot_state_temps_density(temps_for_ggplot_density, plot_year, 23, temp_measure, 0, 1150) + remove_x)/ #"cdd_summer"
+  first <- ((plot_state_temps_density(temps_for_ggplot_density, plot_year, 23, temp_measure, 0, 1150) + remove_x)/ 
               (plot_state_temps_density(temps_for_ggplot_density, plot_year, 33, temp_measure, 0, 1200)+ remove_x)/
               (plot_state_temps_density(temps_for_ggplot_density, plot_year, 50, temp_measure, 0, 1200)+ remove_x)/
               (plot_state_temps_density(temps_for_ggplot_density, plot_year, 25, temp_measure, 0, 1200)+ remove_x)/
@@ -289,7 +289,7 @@ make_wec_contrasts_tracts <- function(data, ref = "Other"){
   return(contrasts)
 }
 
-run_feols_tempdisparity <- function(df_county_temp_and_race, temp_measure = c("cdd_summer", "noaa_cdd")){ #should rename since now feols
+run_feols_tempdisparity <- function(df_county_temp_and_race, temp_measure = c("cdd_summer", "noaa_cdd")){ 
   
   state_fips1 <- str_sub(df_county_temp_and_race$County_FIPS[1], 1, 2)
   contrasts(df_county_temp_and_race$race) <- make_wec_contrasts_tracts(df_county_temp_and_race, "Other")
@@ -303,12 +303,11 @@ run_feols_tempdisparity <- function(df_county_temp_and_race, temp_measure = c("c
     feols_formula <- as.formula(paste(temp_measure, "~ race|County_FIPS + year"))
   }
   
-  feols_temp_results1 <- feols(feols_formula, data = df_county_temp_and_race, weights = df_county_temp_and_race$estimate, conley(cutoff = 10)) #~GEOID + year 
+  feols_temp_results1 <- feols(feols_formula, data = df_county_temp_and_race, weights = df_county_temp_and_race$estimate, conley(cutoff = 10))  
   
   results <- enframe(coef(feols_temp_results1)) %>%
     left_join(., as_tibble(confint(feols_temp_results1, 
                                    vcov = "conley",
-                                   #cluster = "GEOID^year",
                                    parm = c("raceBlack", "raceLatino", "raceAsian", "raceWhite"), 
                                    level = 0.95, 
                                    coef.col = T)),
@@ -325,8 +324,7 @@ run_feols_tempdisparity <- function(df_county_temp_and_race, temp_measure = c("c
   return(results)
 }
 
-run_feols_tempdisparity_state <- function(df_county_temp_and_race, temp_measure = c("cdd_summer", "noaa_cdd")){ #should rename since now feols
-  
+run_feols_tempdisparity_state <- function(df_county_temp_and_race, temp_measure = c("cdd_summer", "noaa_cdd")){ 
   state_fips1 <- str_sub(df_county_temp_and_race$County_FIPS[1], 1, 2)
   contrasts(df_county_temp_and_race$race) <- make_wec_contrasts_tracts(df_county_temp_and_race, "Other")
   
@@ -339,15 +337,15 @@ run_feols_tempdisparity_state <- function(df_county_temp_and_race, temp_measure 
     feols_formula <- as.formula(paste(temp_measure, "~ race|County_FIPS + year"))
   }
   
-  feols_temp_results1 <- feols(feols_formula, data = df_county_temp_and_race, weights = df_county_temp_and_race$estimate, conley(cutoff = 10)) #~GEOID + year 
+  feols_temp_results1 <- feols(feols_formula, data = df_county_temp_and_race, weights = df_county_temp_and_race$estimate, conley(cutoff = 10)) 
   
   return(feols_temp_results1)
 }
 
 
-create_meandiff_table <- function(temp_model, census_data, temp_measure = c("cdd_summer", "noaa_cdd"),tract_centroids,fips_to_statename_crosswalk){ #double check this is working right 
+create_meandiff_table <- function(temp_model, census_data, temp_measure = c("cdd_summer", "noaa_cdd"),tract_centroids,fips_to_statename_crosswalk){ 
   
-  temp_model1 <<- temp_model #is this duplication of the dfs necessary?
+  temp_model1 <<- temp_model 
   census_data1 <<- census_data
   
   Temperature_w_Censusdata <<- temp_model1 %>% 
@@ -357,7 +355,7 @@ create_meandiff_table <- function(temp_model, census_data, temp_measure = c("cdd
     group_by(State_FIPS) %>%
     mutate(wec_weight = estimate/Total_pop) %>% 
     ungroup() %>%
-    dplyr::select(State_FIPS, year, County_FIPS, all_of(temp_measure), race, estimate, GEOID, RUCA_code2, census_year, urban, RUCA_code1, wec_weight) %>% #temp_measure
+    dplyr::select(State_FIPS, year, County_FIPS, all_of(temp_measure), race, estimate, GEOID, RUCA_code2, census_year, urban, RUCA_code1, wec_weight) %>% 
     filter(estimate!=0) %>%
     left_join(., tract_centroids %>% st_drop_geometry() %>% select(GEOID, census_year, longitude, latitude, elevation), by = c("GEOID", "census_year"))
   
@@ -381,9 +379,9 @@ create_feols_objects <- function(temp_model,
                                  census_data,
                                  state_code,
                                  temp_measure = "noaa_cdd",
-                                 tract_centroids){ #double check this is working right 
+                                 tract_centroids){ 
   
-  temp_model1 <<- temp_model #is this duplication of the dfs necessary?
+  temp_model1 <<- temp_model 
   census_data1 <<- census_data
   
   Temperature_w_Censusdata <<- temp_model1 %>% 
@@ -393,7 +391,7 @@ create_feols_objects <- function(temp_model,
     group_by(State_FIPS) %>%
     mutate(wec_weight = estimate/Total_pop) %>% 
     ungroup() %>%
-    dplyr::select(State_FIPS, year, County_FIPS, all_of(temp_measure), race, estimate, GEOID, RUCA_code2, census_year, urban, RUCA_code1, wec_weight) %>% #temp_measure
+    dplyr::select(State_FIPS, year, County_FIPS, all_of(temp_measure), race, estimate, GEOID, RUCA_code2, census_year, urban, RUCA_code1, wec_weight) %>% 
     filter(estimate!=0) %>%
     left_join(., tract_centroids %>% st_drop_geometry() %>% select(GEOID, census_year, longitude, latitude, elevation), by = c("GEOID", "census_year"))
   
@@ -412,8 +410,8 @@ create_table_1 <- function(Temperatures_XGBoost_summer_avgs, Tract_RaceEthn_Cens
 }
 
 #### Calculating spatial measures of segregation ####
-counties_to_join <- tibble::tibble(problem_county = c("51045", "51720", "51017", "51005", "51560", "51580", "51640", "51515", "51530", "51678", "51685", "51610", "51115", "54105"), #"51005",
-                           merge_with =     c("51775", "51195", "51091", "51091", "51091", "51091", "51035", "51019", "51163", "51163", "51683", "51013", "51073", "54103")) #51091
+counties_to_join <- tibble::tibble(problem_county = c("51045", "51720", "51017", "51005", "51560", "51580", "51640", "51515", "51530", "51678", "51685", "51610", "51115", "54105"), 
+                           merge_with =     c("51775", "51195", "51091", "51091", "51091", "51091", "51035", "51019", "51163", "51163", "51683", "51013", "51073", "54103")) 
 
 calculate_spatial_seg_measure_per_county <- function(county_fip, census_year1) {
   
@@ -424,12 +422,12 @@ calculate_spatial_seg_measure_per_county <- function(county_fip, census_year1) {
   specific_county_polygon <- CT_counties_trimmed %>%
     filter(COUNTYFIPS==county_fip) 
   
-  st_geometry(specific_county_polygon) <- st_collection_extract(x = st_geometry(specific_county_polygon), #geometries that need to be fixed before spatial
+  st_geometry(specific_county_polygon) <- st_collection_extract(x = st_geometry(specific_county_polygon), 
                                                                 type = "POLYGON")
   specific_county_polygon <- st_transform(specific_county_polygon, crs = st_crs(epsg_county))
   
   
-  cty_as_owin <- as.owin(as_Spatial(specific_county_polygon)) #asowin can currently use maptools to make a spatialpolygon, but maptools is being removed Oct 2023. need a workaround later.
+  cty_as_owin <- as.owin(as_Spatial(specific_county_polygon)) 
   
   #projecting the centroids in the stateplane system 
   county_2010_popcentroids1 <- CT_popcentroids %>% 
@@ -521,7 +519,7 @@ calculate_all_resseg_by_state <- function(state_fips, census_year1,tract_centroi
     
   }else{
     
-    CT_counties <- counties(state = state_fips, cb = TRUE, year = census_year1) %>% #state_fips 
+    CT_counties <- counties(state = state_fips, cb = TRUE, year = census_year1) %>%  
       mutate(COUNTYFIPS = paste0(STATEFP, COUNTYFP))
   }
   
@@ -549,7 +547,7 @@ create_df_for_seg_analysis <- function(temp_model, census_data, seg_measures,tra
   
   Temperatures_XGBoost_resseg <- temp_model %>%
     left_join(., census_data %>% dplyr::select(census_year, GEOID, State_FIPS, County_FIPS, contains("ICE"),), by = c("census_year", "GEOID")) %>%
-    inner_join(., sfc_as_cols(tract_centroids) %>% dplyr::select(-NAME, -Total_pop), by = c("GEOID", "census_year")) %>%#tract_centroids1
+    inner_join(., sfc_as_cols(tract_centroids) %>% dplyr::select(-NAME, -Total_pop), by = c("GEOID", "census_year")) %>%
     left_join(., seg_measures, by = c("GEOID", "census_year")) %>%
     mutate(year = as.factor(year), 
            County_FIPS = as.factor(County_FIPS))  
@@ -612,7 +610,7 @@ compile_all_bams_for_figure <- function(Temperatures_w_resseg,all_region_seg_bam
     
     plot_title <- if_else(race=="white", "White",
                           if_else(race == "asian", "Asian",
-                                  if_else(race=="black", "Black", "Latine")))
+                                  if_else(race=="black", "Black", "Latino")))
     
     smooth_object <- smooth_estimates(bam_model, smooth = 1) %>% add_confint(coverage = .9983) 
     
@@ -629,7 +627,7 @@ compile_all_bams_for_figure <- function(Temperatures_w_resseg,all_region_seg_bam
         ggplot() +
         theme_bw() +
         stat_bin_hex(aes(x = get(race), y = get(smooth)), data = temp1, alpha = .8, bins = 50) +
-        scale_fill_continuous(low = "#91cbfa", high = "#132B43") + #56B1F7
+        scale_fill_continuous(low = "#91cbfa", high = "#132B43") + 
         geom_line(aes(y = lower_ci, x = get(race)), linetype = 2) +
         geom_line(aes(y = upper_ci, x = get(race)), linetype = 2) +
         geom_line(aes(x = get(race), y = est), lwd = .5, alpha = .5) +
@@ -694,7 +692,7 @@ compile_all_bams_for_figure <- function(Temperatures_w_resseg,all_region_seg_bam
         ggplot() +
         theme_bw() +
         stat_bin_hex(aes(x = get(race), y = get(smooth)), data = temp1, alpha = .8, bins = 50) +
-        scale_fill_continuous(low = "#91cbfa", high = "#132B43") + #b0e1ff
+        scale_fill_continuous(low = "#91cbfa", high = "#132B43") +
         geom_line(aes(y = lower_ci, x = get(race)), linetype = 2) +
         geom_line(aes(y = upper_ci, x = get(race)), linetype = 2) +
         geom_line(aes(x = get(race), y = est), lwd = .5, alpha = .5) +
@@ -755,9 +753,9 @@ create_plot_2 <- function(Temperatures_w_resseg, all_region_seg_bams, body = TRU
   plot2_object <- compile_all_bams_for_figure(Temperatures_w_resseg,all_region_seg_bams)
   
   if(body==TRUE){
-    ggsave(here("paper", "plot2.png"), plot = plot2_object, width = 7, height = 6.5, units = "in", dpi = 600)
+    ggsave(here("paper", "plot2.pdf"), device = "pdf", plot = plot2_object, width = 11, height = 9.5, units = "in")
   }else{
-    ggsave(here("paper", "supp_plot_2knots.png"), plot = plot2_object, width = 7, height = 6.5, units = "in", dpi = 600)
+    ggsave(here("paper", "supp_plot_2knots.pdf"), device = "pdf", plot = plot2_object, width = 11, height = 9.5, units = "in")
   }
   
   return(plot2_object)
@@ -854,7 +852,7 @@ create_state_seg_bam_smooth_plot <- function(bam_model, ethnorace = c("asian", "
   
   plot_title <- if_else(ethnorace=="white", "White",
                         if_else(ethnorace == "asian", "Asian",
-                                if_else(ethnorace=="black", "Black", "Latine")))
+                                if_else(ethnorace=="black", "Black", "Latino")))
   
   smooth = paste0("s(", ethnorace, ")")
   
@@ -957,11 +955,13 @@ plot_supp_fig_states_seg_regressions <- function(states1, states2, regions,Tempe
                                                                      Temperatures_w_resseg = Temperatures_w_resseg) + 
                                     plot_layout(ncol =4, nrow = 1)) 
     
-    states_seg_plots <- states1_plot/states2_plot
+    states_seg_plots <- states1_plot/states2_plot + plot_annotation(caption = "Ethnoracial concentration (%)", 
+                                                                    theme = theme(plot.caption = element_text(hjust = 0.5, size = 15)))
     
   }else{
     
-    states_seg_plots <- states1_plot
+    states_seg_plots <- states1_plot + plot_annotation(caption = "Ethnoracial concentration (%)", 
+                                                       theme = theme(plot.caption = element_text(hjust = 0.5, size = 15)))
     
   }
   
@@ -978,7 +978,7 @@ create_supp_fig_states_seg_regression_plots <- function(Temperatures_w_resseg,al
     Temperatures_w_resseg = Temperatures_w_resseg,
     all_states_seg_bams = all_states_seg_bams
   )
-  ggsave(here("paper", "supp_state_plot_1.png"), plot = plot1, width = 7, height = 6.5, units = "in", dpi = 600)
+  ggsave(here("paper", "supp_state_plot_1.png"), plot = plot1, width = 10, height = 8, units = "in")
   
   # Plot 2
   plot2 <- plot_supp_fig_states_seg_regressions(
@@ -988,7 +988,7 @@ create_supp_fig_states_seg_regression_plots <- function(Temperatures_w_resseg,al
     Temperatures_w_resseg = Temperatures_w_resseg,
     all_states_seg_bams = all_states_seg_bams
   )
-  ggsave(here("paper", "supp_state_plot_2.png"), plot = plot2, width = 7, height = 6.5, units = "in", dpi = 600)
+  ggsave(here("paper", "supp_state_plot_2.png"), plot = plot2, width = 10, height = 8, units = "in")
   
   # Plot 3
   plot3 <- plot_supp_fig_states_seg_regressions(
@@ -998,7 +998,7 @@ create_supp_fig_states_seg_regression_plots <- function(Temperatures_w_resseg,al
     Temperatures_w_resseg = Temperatures_w_resseg,
     all_states_seg_bams = all_states_seg_bams
   )
-  ggsave(here("paper", "supp_state_plot_3.png"), plot = plot3, width = 7, height = 6.5, units = "in", dpi = 600)
+  ggsave(here("paper", "supp_state_plot_3.png"), plot = plot3, width = 10, height = 5, units = "in")
   
   # Optionally return the plots as a list if you might want to inspect them later.
   list(plot1, plot2, plot3)
@@ -1065,7 +1065,7 @@ all_ice_bam_plots <- function(all_region_ice_bams,Temperatures_w_resseg) {
     
     plot_title <- if_else(race=="bipoc", "All except white",
                           if_else(race == "asian", "Asian",
-                                  if_else(race=="black", "Black", "Hispanic/Latine")))
+                                  if_else(race=="black", "Black", "Latino")))
     
     smooth_object <- smooth_estimates(bam_model, smooth = 1) %>% add_confint(coverage = .9983) #bam_model replacement here
     
@@ -1074,7 +1074,7 @@ all_ice_bam_plots <- function(all_region_ice_bams,Temperatures_w_resseg) {
     temp1 <- Temperatures_w_resseg %>% 
       filter(State_FIPS %in% fips_in_region,
              !is.na(get(ice_var))) %>%
-      add_partial_residuals(bam_model, select =1) #insert bam_model all_region_bams$south_atlantic_white
+      add_partial_residuals(bam_model, select =1) 
     
     smooth = paste0("s(", ice_var, ")")
     
@@ -1205,7 +1205,7 @@ all_ice_bam_plots <- function(all_region_ice_bams,Temperatures_w_resseg) {
 
 create_ice_bam_plots <- function(all_region_ice_bams,Temperatures_w_resseg){
   plot_object <- all_ice_bam_plots(all_region_ice_bams,Temperatures_w_resseg)
-  ggsave(here("paper", "supp_ice_bam_plots.png"), plot = plot_object, width = 7, height = 6.5, units = "in", dpi = 600)
+  ggsave(here("paper", "supp_ice_bam_plots.png"), plot = plot_object, width = 11, height = 8, units = "in", dpi = 600)
 }
 
 #Time series plots
