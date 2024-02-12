@@ -7,7 +7,7 @@ NEMIA_States <- c("09", "23", "25", "33", "44", "50",
 
 # Read temperatures_xgboost
 read_temperatures_xgboost <- function(){
-  read_parquet(here("data", "summarized_daily_temp_preds_F.parquet"))
+  read_parquet(here("data", "summarized_daily_temp_preds.parquet")) #"summarized_daily_temp_preds_F.parquet"))
 }
 
 
@@ -1324,7 +1324,8 @@ plot_nemia_county_maps <- function(state_codes_to_plot, county_codes_to_plot, ne
     geom_sf(data = nemia_counties_sf %>% filter(STATEFP == state_codes_to_plot), fill = "gray") + 
     geom_sf(data = nemia_counties_sf %>% filter(countyfips == county_codes_to_plot), fill = "red") + 
     theme_minimal() +
-    theme(axis.text = element_text(size = 7))
+    theme(axis.text = element_text(size = 7),
+          axis.text.x = element_text(angle = 45))
   
   map_layout <- '
 ABB
@@ -1375,5 +1376,5 @@ create_timeseries_plots <- function(Temperatures_XGBoost_summer_avgs,Tract_RaceE
                                              Temperatures_XGBoost_summer_avgs = Temperatures_XGBoost_summer_avgs,
                                              Tract_RaceEthn_Census = Tract_RaceEthn_Census,
                                              tract_centroids)
-  ggsave(here("paper", "supp_timeseries_plot.png"), plot = plot_object, width = 7, height = 6.5, units = "in", dpi = 600)
+  ggsave(here("paper", "timeseries_plot.png"), plot = plot_object, width = 10, height = 7, units = "in", dpi = 600)
 }
