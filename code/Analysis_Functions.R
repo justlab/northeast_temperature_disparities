@@ -7,6 +7,7 @@ NEMIA_States <- c("09", "23", "25", "33", "44", "50",
 
 # Read temperatures_xgboost
 read_temperatures_xgboost <- function(){
+  download.file("https://zenodo.org/records/10557980/files/summarized_daily_temp_preds.parquet?download=1", destfile = here("data","summarized_daily_temp_preds.parquet"))
   read_parquet(here("data", "summarized_daily_temp_preds.parquet")) #"summarized_daily_temp_preds_F.parquet"))
 }
 
