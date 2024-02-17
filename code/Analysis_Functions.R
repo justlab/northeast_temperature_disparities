@@ -8,7 +8,7 @@ NEMIA_States <- c("09", "23", "25", "33", "44", "50",
 # Read temperatures_xgboost
 read_temperatures_xgboost <- function(){
   download.file("https://zenodo.org/records/10557980/files/summarized_daily_temp_preds.parquet?download=1", destfile = here("data","summarized_daily_temp_preds.parquet"))
-  read_parquet(here("data", "summarized_daily_temp_preds.parquet")) #"summarized_daily_temp_preds_F.parquet"))
+  read_parquet(here("data", "summarized_daily_temp_preds.parquet")) 
 }
 
 
@@ -43,7 +43,6 @@ clean_and_summarize_temperatures <- function(temperature_df){
     mutate(year = year(date),
            noaa_mean = ((max_temp_daily_cK + min_temp_daily_cK)/2)/100, #data in centikelvin
            noaa_mean_cdd = create_cdds_f(KtoF(noaa_mean)),
-           #noaa_mean_cdd = ifelse(noaa_mean_cdd<0, 0, noaa_mean_cdd),
            hourly_mean = mean_temp_daily_cK/100,
            mean_24hour_cdd = create_cdds_f(KtoF(hourly_mean))) %>%
     group_by(year, GEOID) %>%
